@@ -42,8 +42,15 @@ export default function Home() {
   const { currentView, splashDone, setSplashDone, setView } = useUIStore();
   const { user, token, setUser, setToken, logout } = useAuthStore();
 
+  // Fix hydration mismatch: splashDone persisted but currentView reset to 'splash'
   useEffect(() => {
-    if (user && token) {
+    if (splashDone && currentView === 'splash') {
+      setView(user && token ? 'chat' : 'welcome');
+    }
+  }, [splashDone, currentView, user, token, setView]);
+
+  useEffect(() => {
+    if (user && token && currentView !== 'splash') {
       api('/auth/me', { token })
         .then((u: any) => {
           setUser(u);

@@ -11,6 +11,7 @@ import { api } from '@/lib/api';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import type { User } from '@/types';
+import Image from 'next/image';
 
 export function SignUpForm() {
   const setView = useUIStore((s) => s.setView);
@@ -52,11 +53,27 @@ export function SignUpForm() {
       >
         <button
           onClick={() => setView('welcome')}
-          className="mb-8 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
+          className="mb-6 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
         >
           <ArrowLeft className="h-4 w-4" />
           Back
         </button>
+
+        {/* Logo */}
+        <div className="mb-6 flex justify-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl overflow-hidden">
+            <Image
+              src="/logo.png"
+              alt="KIVO"
+              width={56}
+              height={56}
+              priority
+              quality={100}
+              sizes="56px"
+              className="object-contain p-1"
+            />
+          </div>
+        </div>
 
         <h1 className="mb-1 text-2xl font-semibold tracking-tight">Create Account</h1>
         <p className="mb-8 text-sm text-muted-foreground">Join KIVO today</p>

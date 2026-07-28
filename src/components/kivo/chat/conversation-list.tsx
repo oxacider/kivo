@@ -12,6 +12,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Search, Plus, Users, Settings, UserCircle, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { formatDistanceToNow } from 'date-fns';
+import Image from 'next/image';
 import type { Conversation, User } from '@/types';
 import { connectSocket, disconnectSocket } from '@/lib/socket';
 import { toast } from 'sonner';
@@ -120,14 +121,16 @@ export function ConversationList() {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border/30">
         <div className="flex items-center gap-3">
-          {user && (
-            <Avatar className="h-8 w-8">
-              <AvatarImage src={user.avatar || undefined} />
-              <AvatarFallback className="text-xs bg-primary/10 text-primary">
-                {getInitials(user.displayName || 'U')}
-              </AvatarFallback>
-            </Avatar>
-          )}
+          <Image
+            src="/logo.png"
+            alt="KIVO"
+            width={28}
+            height={28}
+            priority
+            quality={100}
+            sizes="28px"
+            className="object-contain"
+          />
           <div>
             <h2 className="text-sm font-semibold leading-none">Chats</h2>
             {user && <p className="text-[11px] text-muted-foreground">@{user.username}</p>}

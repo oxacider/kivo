@@ -16,6 +16,7 @@ import { useTheme } from 'next-themes';
 import { ArrowLeft, Loader2, User, Palette, Bell, Shield, LogOut, UserX } from 'lucide-react';
 import { toast } from 'sonner';
 import { disconnectSocket } from '@/lib/socket';
+import Image from 'next/image';
 
 function getInitials(name: string) { return name.slice(0, 2).toUpperCase(); }
 
@@ -233,10 +234,25 @@ export function SettingsPanel() {
       >
         <button
           onClick={() => setView('chat')}
-          className="mb-6 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          className="mb-4 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="h-4 w-4" /> Back
         </button>
+
+        {/* Logo */}
+        <div className="mb-6 flex justify-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl overflow-hidden">
+            <Image
+              src="/logo.png"
+              alt="KIVO"
+              width={56}
+              height={56}
+              quality={100}
+              sizes="56px"
+              className="object-contain p-1"
+            />
+          </div>
+        </div>
 
         <h2 className="mb-6 text-lg font-semibold">Settings</h2>
 

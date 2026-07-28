@@ -127,3 +127,33 @@ Stage Summary:
 - 8 missing PRD features implemented (Block/Unblock, Forgot Password, Profile View, Message Search, Forward, Notification Settings, Privacy Settings, Blocked Users page)
 - 5 code quality issues fixed
 - All Agent Browser E2E tests passed with 0 browser errors
+
+---
+Task ID: Logo Integration
+Agent: Main
+Task: Integrate uploaded logo.png as the official primary logo across the entire application
+
+Work Log:
+- Copied uploaded /upload/logo.png to /public/logo.png
+- Created reusable KivoLogo component at src/components/kivo/kivo-logo.tsx
+- Replaced splash-screen.tsx: removed purple gradient box with white "K" text → Next.js Image with logo.png (80x80, object-contain, p-1.5)
+- Replaced welcome-screen.tsx: removed MessageCircle icon in gradient box → Next.js Image with logo.png
+- Added logo to sign-in-form.tsx: 56x56 Image centered above heading
+- Added logo to sign-up-form.tsx: 56x56 Image centered above heading
+- Updated conversation-list.tsx sidebar header: replaced user avatar → 28x28 logo.png next to "Chats" title
+- Updated conversation-view.tsx empty state: replaced inline SVG chat icon → 64x64 logo.png with 30% opacity
+- Added logo to settings-panel.tsx main section: 56x56 Image centered above "Settings" heading
+- Updated layout.tsx: icons.icon and icons.apple changed from /kivo-logo.png to /logo.png
+- Updated manifest.json: icon src changed from /kivo-logo.png to /logo.png
+- Added `images.qualities: [100, 75]` to next.config.ts to fix quality warning
+- Removed stale files: /public/kivo-logo.png, /public/logo.svg
+- Fixed pre-existing hydration bug: splashDone persisted but currentView reset to 'splash' on reload → added useEffect to auto-redirect to welcome/chat
+- All logo images use Next.js Image component with quality=100, sizes matching display, object-contain, and proper padding
+
+Stage Summary:
+- 8 component files updated, 1 new reusable component created
+- 3 config/metadata files updated (layout.tsx, manifest.json, next.config.ts)
+- 2 stale files removed
+- 1 hydration bug fixed
+- Verified via Agent Browser: logo renders correctly on welcome, sign-in, and sign-up screens
+- Lint: 0 errors

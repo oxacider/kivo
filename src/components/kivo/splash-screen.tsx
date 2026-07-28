@@ -2,6 +2,7 @@
 
 import { motion, AnimatePresence } from 'framer-motion';
 import { useEffect, useState } from 'react';
+import Image from 'next/image';
 
 export function SplashScreen({ onDone }: { onDone: () => void }) {
   const [phase, setPhase] = useState(0);
@@ -73,15 +74,23 @@ export function SplashScreen({ onDone }: { onDone: () => void }) {
           transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
         >
           <motion.div
-            className="mb-6 flex h-20 w-20 items-center justify-center rounded-2xl"
+            className="mb-6 flex h-20 w-20 items-center justify-center rounded-2xl overflow-hidden"
             style={{
-              background: 'linear-gradient(135deg, oklch(0.623 0.258 293.009), oklch(0.541 0.281 293.009))',
               boxShadow: '0 8px 32px oklch(0.541 0.281 293.009 / 0.3)',
             }}
             animate={phase >= 2 ? { rotate: [0, -5, 5, 0] } : {}}
             transition={{ duration: 0.6, ease: 'easeInOut' }}
           >
-            <span className="text-3xl font-bold text-white tracking-tight">K</span>
+            <Image
+              src="/logo.png"
+              alt="KIVO"
+              width={80}
+              height={80}
+              priority
+              quality={100}
+              sizes="80px"
+              className="object-contain p-1.5"
+            />
           </motion.div>
 
           <motion.h1

@@ -20,8 +20,8 @@ export const metadata: Metadata = {
   keywords: ["KIVO", "messaging", "chat", "secure", "premium", "privacy"],
   authors: [{ name: "KIVO Team" }],
   icons: {
-    icon: "/kivo-logo.png",
-    apple: "/kivo-logo.png",
+    icon: "/logo.png",
+    apple: "/logo.png",
   },
   manifest: "/manifest.json",
 };

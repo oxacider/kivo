@@ -12,6 +12,7 @@ import { Send, Smile, MoreHorizontal, ArrowLeft, Check, CheckCheck, Edit3, Trash
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
+import Image from 'next/image';
 import type { Message } from '@/types';
 
 function getInitials(name: string) { return name.slice(0, 2).toUpperCase(); }
@@ -159,8 +160,16 @@ export function ConversationView() {
     return (
       <div className="flex h-full flex-col items-center justify-center bg-background">
         <div className="text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-surface-1">
-            <svg className="h-8 w-8 text-muted-foreground/30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl overflow-hidden">
+            <Image
+              src="/logo.png"
+              alt="KIVO"
+              width={64}
+              height={64}
+              quality={100}
+              sizes="64px"
+              className="object-contain p-1.5 opacity-30"
+            />
           </div>
           <h3 className="text-sm font-medium text-muted-foreground">Select a conversation</h3>
           <p className="mt-1 text-xs text-muted-foreground/60">Choose a chat to start messaging</p>

@@ -3,7 +3,8 @@
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { useUIStore } from '@/stores/ui-store';
-import { MessageCircle, Shield, Zap, Sparkles } from 'lucide-react';
+import { Shield, Zap, Sparkles } from 'lucide-react';
+import Image from 'next/image';
 
 export function WelcomeScreen() {
   const setView = useUIStore((s) => s.setView);
@@ -24,16 +25,24 @@ export function WelcomeScreen() {
       >
         {/* Logo mark */}
         <motion.div
-          className="mb-8 flex h-20 w-20 items-center justify-center rounded-2xl"
+          className="mb-8 flex h-20 w-20 items-center justify-center rounded-2xl overflow-hidden"
           style={{
-            background: 'linear-gradient(135deg, oklch(0.623 0.258 293.009), oklch(0.541 0.281 293.009))',
             boxShadow: '0 8px 32px oklch(0.541 0.281 293.009 / 0.25)',
           }}
           initial={{ scale: 0.8 }}
           animate={{ scale: 1 }}
           transition={{ delay: 0.1, duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
         >
-          <MessageCircle className="h-10 w-10 text-white" strokeWidth={1.8} />
+          <Image
+            src="/logo.png"
+            alt="KIVO"
+            width={80}
+            height={80}
+            priority
+            quality={100}
+            sizes="80px"
+            className="object-contain p-1.5"
+          />
         </motion.div>
 
         <motion.h1
