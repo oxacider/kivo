@@ -25,10 +25,6 @@ export async function getAuthUser(request: Request): Promise<User | null> {
   return user as User | null;
 }
 
-export function jsonResponse(data: unknown, status = 200) {
-  return Response.json(data, { status });
-}
-
 export function errorResponse(error: string, status = 400) {
   return Response.json({ success: false, error }, { status });
 }

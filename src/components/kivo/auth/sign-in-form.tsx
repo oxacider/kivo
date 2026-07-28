@@ -90,6 +90,16 @@ export function SignInForm() {
             />
           </div>
 
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => setView('forgot-password')}
+              className="text-xs text-muted-foreground hover:text-primary transition-colors"
+            >
+              Forgot password?
+            </button>
+          </div>
+
           <Button
             type="submit"
             disabled={loading || !email || !password}

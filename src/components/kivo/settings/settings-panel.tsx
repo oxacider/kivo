@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Switch } from '@/components/ui/switch';
 import { useTheme } from 'next-themes';
-import { ArrowLeft, Loader2, User, Palette, Bell, Shield, LogOut } from 'lucide-react';
+import { ArrowLeft, Loader2, User, Palette, Bell, Shield, LogOut, UserX } from 'lucide-react';
 import { toast } from 'sonner';
 import { disconnectSocket } from '@/lib/socket';
 
@@ -23,7 +23,10 @@ export function SettingsPanel() {
   const { user, token, setUser, logout } = useAuthStore();
   const { setView } = useUIStore();
   const { theme, setTheme } = useTheme();
-  const [section, setSection] = useState<'main' | 'edit-profile'>('main');
+  const [section, setSection] = useState<'main' | 'edit-profile' | 'notifications' | 'privacy' | 'blocked'>('main');
+  const [notifSettings, setNotifSettings] = useState({ messages: true, friendRequests: true });
+  const [privacySettings, setPrivacySettings] = useState({ showOnline: true, showLastSeen: true, showReadReceipts: true });
+  const [blockedUsers, setBlockedUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({ displayName: user?.displayName || '', bio: user?.bio || '', status: user?.status || '' });
 
@@ -117,6 +120,110 @@ export function SettingsPanel() {
     );
   }
 
+  if (section === 'notifications') {
+    return (
+      <div className="min-h-screen bg-background px-4 py-6">
+        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="mx-auto max-w-md">
+          <button onClick={() => setSection('main')} className="mb-6 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
+            <ArrowLeft className="h-4 w-4" /> Back
+          </button>
+          <h2 className="mb-6 text-lg font-semibold">Notifications</h2>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between rounded-xl bg-surface-1 p-4">
+              <div>
+                <p className="text-sm font-medium">Message Notifications</p>
+                <p className="text-xs text-muted-foreground">Get notified for new messages</p>
+              </div>
+              <Switch checked={notifSettings.messages} onCheckedChange={(v) => setNotifSettings((s) => ({ ...s, messages: v }))} />
+            </div>
+            <div className="flex items-center justify-between rounded-xl bg-surface-1 p-4">
+              <div>
+                <p className="text-sm font-medium">Friend Request Alerts</p>
+                <p className="text-xs text-muted-foreground">Get notified for friend requests</p>
+              </div>
+              <Switch checked={notifSettings.friendRequests} onCheckedChange={(v) => setNotifSettings((s) => ({ ...s, friendRequests: v }))} />
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
+  if (section === 'privacy') {
+    return (
+      <div className="min-h-screen bg-background px-4 py-6">
+        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="mx-auto max-w-md">
+          <button onClick={() => setSection('main')} className="mb-6 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
+            <ArrowLeft className="h-4 w-4" /> Back
+          </button>
+          <h2 className="mb-6 text-lg font-semibold">Privacy & Security</h2>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between rounded-xl bg-surface-1 p-4">
+              <div>
+                <p className="text-sm font-medium">Show Online Status</p>
+                <p className="text-xs text-muted-foreground">Let others see when you're online</p>
+              </div>
+              <Switch checked={privacySettings.showOnline} onCheckedChange={(v) => setPrivacySettings((s) => ({ ...s, showOnline: v }))} />
+            </div>
+            <div className="flex items-center justify-between rounded-xl bg-surface-1 p-4">
+              <div>
+                <p className="text-sm font-medium">Show Last Seen</p>
+                <p className="text-xs text-muted-foreground">Let others see when you were last active</p>
+              </div>
+              <Switch checked={privacySettings.showLastSeen} onCheckedChange={(v) => setPrivacySettings((s) => ({ ...s, showLastSeen: v }))} />
+            </div>
+            <div className="flex items-center justify-between rounded-xl bg-surface-1 p-4">
+              <div>
+                <p className="text-sm font-medium">Read Receipts</p>
+                <p className="text-xs text-muted-foreground">Show when you've read messages</p>
+              </div>
+              <Switch checked={privacySettings.showReadReceipts} onCheckedChange={(v) => setPrivacySettings((s) => ({ ...s, showReadReceipts: v }))} />
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
+  if (section === 'blocked') {
+    return (
+      <div className="min-h-screen bg-background px-4 py-6">
+        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="mx-auto max-w-md">
+          <button onClick={() => setSection('main')} className="mb-6 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
+            <ArrowLeft className="h-4 w-4" /> Back
+          </button>
+          <h2 className="mb-6 text-lg font-semibold">Blocked Users</h2>
+          <div className="space-y-2">
+            {blockedUsers.length === 0 && <p className="text-sm text-muted-foreground text-center py-8">No blocked users</p>}
+            {blockedUsers.map((u: any) => (
+              <div key={u.id} className="flex items-center gap-3 rounded-xl bg-surface-1 p-3">
+                <Avatar className="h-10 w-10">
+                  <AvatarFallback className="text-xs bg-destructive/10 text-destructive">{getInitials(u.displayName || '?')}</AvatarFallback>
+                </Avatar>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{u.displayName}</p>
+                  <p className="text-xs text-muted-foreground">@{u.username}</p>
+                </div>
+                <button
+                  onClick={async () => {
+                    try {
+                      await api('/blocks/unblock', { token, body: { userId: u.id } });
+                      setBlockedUsers((prev: any[]) => prev.filter((b: any) => b.id !== u.id));
+                      toast.success('User unblocked');
+                    } catch (err: any) { toast.error(err.message); }
+                  }}
+                  className="text-xs font-medium text-primary hover:bg-primary/10 px-3 py-1.5 rounded-lg transition-colors"
+                >
+                  Unblock
+                </button>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background px-4 py-6">
       <motion.div
@@ -163,8 +270,11 @@ export function SettingsPanel() {
             />
           </div>
 
-          {/* Notifications placeholder */}
-          <div className="flex items-center gap-3 rounded-xl bg-surface-1 p-4">
+          {/* Notifications */}
+          <button
+            onClick={() => setSection('notifications')}
+            className="w-full flex items-center gap-3 rounded-xl bg-surface-1 p-4 text-left hover:bg-surface-hover transition-colors"
+          >
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
               <Bell className="h-5 w-5 text-primary" />
             </div>
@@ -172,10 +282,13 @@ export function SettingsPanel() {
               <p className="text-sm font-medium">Notifications</p>
               <p className="text-xs text-muted-foreground">Message and friend request alerts</p>
             </div>
-          </div>
+          </button>
 
-          {/* Security placeholder */}
-          <div className="flex items-center gap-3 rounded-xl bg-surface-1 p-4">
+          {/* Privacy & Security */}
+          <button
+            onClick={() => setSection('privacy')}
+            className="w-full flex items-center gap-3 rounded-xl bg-surface-1 p-4 text-left hover:bg-surface-hover transition-colors"
+          >
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
               <Shield className="h-5 w-5 text-primary" />
             </div>
@@ -183,7 +296,21 @@ export function SettingsPanel() {
               <p className="text-sm font-medium">Privacy & Security</p>
               <p className="text-xs text-muted-foreground">Manage your security settings</p>
             </div>
-          </div>
+          </button>
+
+          {/* Blocked Users */}
+          <button
+            onClick={() => setSection('blocked')}
+            className="w-full flex items-center gap-3 rounded-xl bg-surface-1 p-4 text-left hover:bg-surface-hover transition-colors"
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
+              <UserX className="h-5 w-5 text-primary" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-medium">Blocked Users</p>
+              <p className="text-xs text-muted-foreground">Manage blocked users</p>
+            </div>
+          </button>
 
           {/* Logout */}
           <button

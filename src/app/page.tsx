@@ -10,6 +10,7 @@ import { SplashScreen } from '@/components/kivo/splash-screen';
 import { WelcomeScreen } from '@/components/kivo/welcome-screen';
 import { SignInForm } from '@/components/kivo/auth/sign-in-form';
 import { SignUpForm } from '@/components/kivo/auth/sign-up-form';
+import { ForgotPasswordForm } from '@/components/kivo/auth/forgot-password-form';
 import { ConversationList } from '@/components/kivo/chat/conversation-list';
 import { ConversationView } from '@/components/kivo/chat/conversation-view';
 import { SettingsPanel } from '@/components/kivo/settings/settings-panel';
@@ -25,6 +26,7 @@ const viewConfig: Record<string, ViewConfig> = {
   welcome: { key: 'welcome' },
   signin: { key: 'signin', slideFrom: 80 },
   signup: { key: 'signup', slideFrom: 80 },
+  'forgot-password': { key: 'forgot-password', slideFrom: 80 },
   chat: { key: 'chat' },
   settings: { key: 'settings', slideFrom: 40 },
   profile: { key: 'profile', slideFrom: 40 },
@@ -84,6 +86,7 @@ export default function Home() {
             {currentView === 'welcome' && <WelcomeScreen />}
             {currentView === 'signin' && <SignInForm />}
             {currentView === 'signup' && <SignUpForm />}
+            {currentView === 'forgot-password' && <ForgotPasswordForm />}
             {currentView === 'settings' && <SettingsPanel />}
             {currentView === 'chat' && <ChatLayout />}
           </motion.div>

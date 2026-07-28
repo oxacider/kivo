@@ -8,7 +8,7 @@ import { api } from '@/lib/api';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { format } from 'date-fns';
-import { Send, Smile, MoreHorizontal, ArrowLeft, Check, CheckCheck, Edit3, Trash2, X, CornerDownRight } from 'lucide-react';
+import { Send, Smile, MoreHorizontal, ArrowLeft, Check, CheckCheck, Edit3, Trash2, X, CornerDownRight, UserX, Forward, Search } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
@@ -26,6 +26,9 @@ export function ConversationView() {
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  const [forwardMsg, setForwardMsg] = useState<Message | null>(null);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchMsg, setSearchMsg] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeout = useRef<NodeJS.Timeout>();
@@ -121,6 +124,37 @@ export function ConversationView() {
     } catch (err: any) { toast.error(err.message); }
   };
 
+  const blockUser = async () => {
+    if (!otherUser) return;
+    try {
+      await api('/blocks/block', { token, body: { userId: otherUser.id } });
+      toast.success(`${otherUser.displayName} has been blocked`);
+      setActiveConversationId(null);
+    } catch (err: any) { toast.error(err.message); }
+  };
+
+  const forwardMessage = (msg: Message) => {
+    setForwardMsg(msg);
+    setReplyTo(null);
+    inputRef.current?.focus();
+  };
+
+  const sendForward = useCallback(() => {
+    if (!forwardMsg?.content || !activeConversationId) return;
+    const socket = getSocket();
+    socket.emit('message:send', {
+      conversationId: activeConversationId,
+      content: forwardMsg.content,
+      type: 'text',
+      replyToId: null,
+    });
+    setForwardMsg(null);
+  }, [forwardMsg, activeConversationId]);
+
+  const filteredMessages = searchMsg
+    ? messages.filter((m) => m.content.toLowerCase().includes(searchMsg.toLowerCase()))
+    : messages;
+
   if (!activeConversationId || !otherUser) {
     return (
       <div className="flex h-full flex-col items-center justify-center bg-background">
@@ -164,7 +198,48 @@ export function ConversationView() {
             ) : 'Offline'}
           </p>
         </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-all">
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-44">
+            <DropdownMenuItem onClick={() => setShowSearch(!showSearch)} className="text-xs cursor-pointer">
+              <Search className="mr-2 h-3.5 w-3.5" /> Search Messages
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => { blockUser(); }} className="text-xs cursor-pointer text-destructive focus:text-destructive">
+              <UserX className="mr-2 h-3.5 w-3.5" /> Block User
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
+
+      {/* Message search bar */}
+      <AnimatePresence>
+        {showSearch && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden border-b border-border/30 bg-surface-1"
+          >
+            <div className="flex items-center gap-2 px-4 py-2">
+              <Search className="h-3.5 w-3.5 text-muted-foreground/50" />
+              <input
+                autoFocus
+                value={searchMsg}
+                onChange={(e) => setSearchMsg(e.target.value)}
+                placeholder="Search in conversation..."
+                className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/40"
+              />
+              <button onClick={() => { setShowSearch(false); setSearchMsg(''); }} className="text-muted-foreground hover:text-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
@@ -178,10 +253,10 @@ export function ConversationView() {
             </div>
           )}
 
-          {messages.map((msg, i) => {
+          {filteredMessages.map((msg, i) => {
             const isMine = msg.senderId === user?.id;
-            const showAvatar = !isMine && (i === 0 || messages[i - 1].senderId !== msg.senderId);
-            const isLast = i === messages.length - 1 || messages[i + 1]?.senderId !== msg.senderId;
+            const showAvatar = !isMine && (i === 0 || filteredMessages[i - 1].senderId !== msg.senderId);
+            const isLast = i === filteredMessages.length - 1 || filteredMessages[i + 1]?.senderId !== msg.senderId;
             const repliedMsg = msg.replyTo;
 
             return (
@@ -236,6 +311,9 @@ export function ConversationView() {
                         >
                           <CornerDownRight className="h-3 w-3 text-muted-foreground" />
                         </button>
+                        <button onClick={() => forwardMessage(msg)} className="rounded-md bg-surface-2 p-1 shadow-sm hover:bg-surface-3 transition-colors">
+                          <Forward className="h-3 w-3 text-muted-foreground" />
+                        </button>
                         <button onClick={() => startEdit(msg)} className="rounded-md bg-surface-2 p-1 shadow-sm hover:bg-surface-3 transition-colors">
                           <Edit3 className="h-3 w-3 text-muted-foreground" />
                         </button>
@@ -251,6 +329,9 @@ export function ConversationView() {
                           className="rounded-md bg-surface-2 p-1 shadow-sm hover:bg-surface-3 transition-colors"
                         >
                           <CornerDownRight className="h-3 w-3 text-muted-foreground" />
+                        </button>
+                        <button onClick={() => forwardMessage(msg)} className="rounded-md bg-surface-2 p-1 shadow-sm hover:bg-surface-3 transition-colors">
+                          <Forward className="h-3 w-3 text-muted-foreground" />
                         </button>
                       </div>
                     )}
@@ -327,6 +408,29 @@ export function ConversationView() {
         )}
       </AnimatePresence>
 
+      {/* Forward preview bar */}
+      <AnimatePresence>
+        {forwardMsg && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden border-t border-border/30 bg-surface-1"
+          >
+            <div className="flex items-center gap-2 px-4 py-2">
+              <Forward className="h-3.5 w-3.5 text-primary" />
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] font-medium text-primary">Forward message</p>
+                <p className="text-[11px] text-muted-foreground truncate">{forwardMsg.content}</p>
+              </div>
+              <button onClick={() => setForwardMsg(null)} className="text-muted-foreground hover:text-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Editing indicator */}
       <AnimatePresence>
         {editingId && (
@@ -395,11 +499,11 @@ export function ConversationView() {
             />
           </div>
           <button
-            onClick={editingId ? saveEdit : sendMessage}
-            disabled={editingId ? !editText.trim() : !input.trim()}
+            onClick={editingId ? saveEdit : forwardMsg ? sendForward : sendMessage}
+            disabled={editingId ? !editText.trim() : forwardMsg ? false : !input.trim()}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-all hover:opacity-90 disabled:opacity-40 kivo-glow"
           >
-            {editingId ? <Check className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+            {editingId ? <Check className="h-4 w-4" /> : forwardMsg ? <Forward className="h-4 w-4" /> : <Send className="h-4 w-4" />}
           </button>
         </div>
       </div>

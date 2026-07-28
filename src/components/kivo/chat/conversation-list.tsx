@@ -56,10 +56,6 @@ export function ConversationList() {
     const socket = connectSocket(user!.id);
     socketRef.current = socket;
 
-    socket.on('connect', () => {
-      socket.emit('auth', { userId: user!.id });
-    });
-
     socket.on('message:new', (msg: any) => {
       addMessage(msg);
       if (msg.conversationId !== activeConversationId) {
@@ -259,7 +255,7 @@ export function ConversationList() {
           <span className="text-[10px]">Chats</span>
         </button>
         <button
-          onClick={() => setView('profile')}
+          onClick={() => setView('settings')}
           className="flex flex-col items-center gap-0.5 text-muted-foreground"
         >
           <UserCircle className="h-5 w-5" />

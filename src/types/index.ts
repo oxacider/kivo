@@ -56,6 +56,7 @@ export type ViewType =
   | 'welcome'
   | 'signin'
   | 'signup'
+  | 'forgot-password'
   | 'chat'
   | 'settings'
   | 'profile'

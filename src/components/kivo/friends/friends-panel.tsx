@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Search, UserPlus, Check, X, UserMinus, ArrowLeft } from 'lucide-react';
+import { Search, UserPlus, Check, X, UserMinus, ArrowLeft, UserX } from 'lucide-react';
 import { toast } from 'sonner';
 import type { User, Friendship } from '@/types';
 
@@ -26,7 +26,8 @@ export function FriendsPanel({ onClose }: Props) {
   const { friends, pendingRequests, sentRequests, searchResults, isSearching, setFriends, setPendingRequests, addFriend, removeFriend, addSentRequest, removeSentRequest, setSearchResults, setIsSearching } = useFriendsStore();
   const { addConversation, setActiveConversationId } = useChatStore();
   const [search, setSearch] = useState('');
-  const [tab, setTab] = useState<'friends' | 'requests' | 'add'>('friends');
+  const [tab, setTab] = useState<'friends' | 'requests' | 'add' | 'blocked'>('friends');
+  const [blockedUsers, setBlockedUsers] = useState<User[]>([]);
   const debounceRef = useRef<NodeJS.Timeout>();
 
   const searchUsers = async (q: string) => {
@@ -79,12 +80,39 @@ export function FriendsPanel({ onClose }: Props) {
     } catch (err: any) { toast.error(err.message); }
   };
 
+  const blockUserAction = async (userId: string, name: string) => {
+    try {
+      await api('/blocks/block', { token, body: { userId } });
+      removeFriend(userId);
+      toast.success(`${name} has been blocked`);
+    } catch (err: any) { toast.error(err.message); }
+  };
+
   const startChat = async (userId: string) => {
     try {
       const conv = await api<any>('/conversations', { token, body: { userId } });
       addConversation(conv);
       setActiveConversationId(conv.id);
       onClose();
+    } catch (err: any) { toast.error(err.message); }
+  };
+
+  useEffect(() => {
+    if (tab === 'blocked') {
+      (async () => {
+        try {
+          const list = await api<User[]>('/blocks/list', { token });
+          setBlockedUsers(list);
+        } catch { /* ignore */ }
+      })();
+    }
+  }, [tab, token]);
+
+  const unblockUser = async (userId: string) => {
+    try {
+      await api('/blocks/unblock', { token, body: { userId } });
+      setBlockedUsers((prev) => prev.filter((u) => u.id !== userId));
+      toast.success('User unblocked');
     } catch (err: any) { toast.error(err.message); }
   };
 
@@ -95,6 +123,7 @@ export function FriendsPanel({ onClose }: Props) {
     { key: 'friends' as const, label: 'Friends', count: friends.length },
     { key: 'requests' as const, label: 'Requests', count: pendingRequests.length },
     { key: 'add' as const, label: 'Add', count: 0 },
+    { key: 'blocked' as const, label: 'Blocked', count: blockedUsers.length },
   ];
 
   return (
@@ -147,6 +176,9 @@ export function FriendsPanel({ onClose }: Props) {
                 </button>
                 <button onClick={() => removeFriendAction(f.id)} className="text-muted-foreground hover:text-destructive transition-colors p-1">
                   <UserMinus className="h-3.5 w-3.5" />
+                </button>
+                <button onClick={() => blockUserAction(f.id, f.displayName || f.username)} className="text-muted-foreground hover:text-destructive transition-colors p-1">
+                  <UserX className="h-3.5 w-3.5" />
                 </button>
               </div>
             ))}
@@ -216,6 +248,31 @@ export function FriendsPanel({ onClose }: Props) {
             {search.length >= 2 && !isSearching && searchResults.length === 0 && (
               <p className="py-4 text-center text-xs text-muted-foreground">No users found</p>
             )}
+          </div>
+        )}
+
+        {tab === 'blocked' && (
+          <div className="p-2">
+            {blockedUsers.length === 0 && (
+              <p className="py-6 text-center text-xs text-muted-foreground">No blocked users</p>
+            )}
+            {blockedUsers.map((u) => (
+              <div key={u.id} className="flex items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-surface-hover transition-colors">
+                <Avatar className="h-8 w-8">
+                  <AvatarFallback className="text-xs bg-destructive/10 text-destructive">{getInitials(u.displayName || '?')}</AvatarFallback>
+                </Avatar>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium truncate">{u.displayName || u.username}</p>
+                  <p className="text-[10px] text-muted-foreground">@{u.username}</p>
+                </div>
+                <button
+                  onClick={() => unblockUser(u.id)}
+                  className="text-[10px] font-medium text-primary hover:bg-primary/10 px-2 py-1 rounded-lg transition-colors"
+                >
+                  Unblock
+                </button>
+              </div>
+            ))}
           </div>
         )}
       </ScrollArea>
