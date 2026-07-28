@@ -1,0 +1,113 @@
+'use client';
+
+import { useState } from 'react';
+import { motion } from 'framer-motion';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { useAuthStore } from '@/stores/auth-store';
+import { useUIStore } from '@/stores/ui-store';
+import { api } from '@/lib/api';
+import { ArrowLeft, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
+import type { User } from '@/types';
+
+export function SignInForm() {
+  const setView = useUIStore((s) => s.setView);
+  const { setUser, setToken } = useAuthStore();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password) return;
+    setLoading(true);
+    try {
+      const data = await api<{ user: User; token: string }>('/auth/login', {
+        body: { email, password },
+      });
+      setUser(data.user);
+      setToken(data.token);
+      setView('chat');
+      toast.success('Welcome back!');
+    } catch (err: any) {
+      toast.error(err.message || 'Sign in failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center px-6 py-12 bg-background">
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -left-32 top-1/4 h-96 w-96 rounded-full bg-primary/5 blur-3xl" />
+      </div>
+
+      <motion.div
+        className="relative z-10 flex w-full max-w-sm flex-col"
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+      >
+        <button
+          onClick={() => setView('welcome')}
+          className="mb-8 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back
+        </button>
+
+        <h1 className="mb-1 text-2xl font-semibold tracking-tight">Sign In</h1>
+        <p className="mb-8 text-sm text-muted-foreground">
+          Welcome back to KIVO
+        </p>
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="email" className="text-xs">Email</Label>
+            <Input
+              id="email"
+              type="email"
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="h-11 rounded-xl bg-surface-1 border-border/50"
+              autoComplete="email"
+            />
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="password" className="text-xs">Password</Label>
+            <Input
+              id="password"
+              type="password"
+              placeholder="Enter your password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="h-11 rounded-xl bg-surface-1 border-border/50"
+              autoComplete="current-password"
+            />
+          </div>
+
+          <Button
+            type="submit"
+            disabled={loading || !email || !password}
+            className="mt-2 h-11 text-sm font-medium rounded-xl kivo-glow"
+            style={{ background: 'linear-gradient(135deg, oklch(0.623 0.258 293.009), oklch(0.541 0.281 293.009))' }}
+          >
+            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Sign In
+          </Button>
+        </form>
+
+        <p className="mt-8 text-center text-sm text-muted-foreground">
+          Don&apos;t have an account?{' '}
+          <button onClick={() => setView('signup')} className="text-primary hover:underline font-medium">
+            Sign Up
+          </button>
+        </p>
+      </motion.div>
+    </div>
+  );
+}
