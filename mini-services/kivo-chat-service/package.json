@@ -1,0 +1,17 @@
+{
+  "name": "kivo-chat-service",
+  "version": "1.0.0",
+  "description": "KIVO real-time chat Socket.io mini-service",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch index.ts",
+    "start": "bun index.ts"
+  },
+  "dependencies": {
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

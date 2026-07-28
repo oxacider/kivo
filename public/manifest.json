@@ -1,0 +1,16 @@
+{
+  "name": "KIVO",
+  "short_name": "KIVO",
+  "description": "Premium Messaging",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f3ff",
+  "theme_color": "#7c3aed",
+  "icons": [
+    {
+      "src": "/kivo-logo.png",
+      "sizes": "any",
+      "type": "image/png"
+    }
+  ]
+}
