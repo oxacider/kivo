@@ -1,44 +1,68 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { useFriendsStore } from '@/stores/friends-store';
 import { useUIStore } from '@/stores/ui-store';
 import { api } from '@/lib/api';
-import { Input } from '@/components/ui/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Search, Plus, Users, Settings, UserCircle, LogOut } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { formatDistanceToNow } from 'date-fns';
-import Image from 'next/image';
-import type { Conversation, User } from '@/types';
+import { Search, Bell, MessageSquarePlus } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { format } from 'date-fns';
 import { connectSocket, disconnectSocket } from '@/lib/socket';
 import { toast } from 'sonner';
-import { FriendsPanel } from '@/components/kivo/friends/friends-panel';
+import type { Conversation, User } from '@/types';
 
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
 function getInitials(name: string) {
   return name.slice(0, 2).toUpperCase();
 }
 
-function formatTime(date: string) {
+function getGreeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good Morning';
+  if (h < 17) return 'Good Afternoon';
+  return 'Good Evening';
+}
+
+function formatTimestamp(date: string) {
   try {
-    return formatDistanceToNow(new Date(date), { addSuffix: false });
+    return format(new Date(date), 'h:mm a');
   } catch {
     return '';
   }
 }
 
+type FilterTab = 'all' | 'unread' | 'groups' | 'archived';
+
+const FILTER_TABS: { key: FilterTab; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'unread', label: 'Unread' },
+  { key: 'groups', label: 'Groups' },
+  { key: 'archived', label: 'Archived' },
+];
+
+/* ------------------------------------------------------------------ */
+/*  Conversation List                                                  */
+/* ------------------------------------------------------------------ */
 export function ConversationList() {
-  const { conversations, activeConversationId, setActiveConversationId, searchQuery, setSearchQuery, setConversations, addConversation, updateConversation, addMessage, updateMessage, removeMessage, setTyping, clearTypingForConversation, clearUnread } = useChatStore();
-  const { user, token, setUser, setToken, logout } = useAuthStore();
-  const { friends, pendingRequests, setFriends, setPendingRequests, removeFriend: removeFriendFromStore } = useFriendsStore();
-  const { setView, mobileSidebarOpen, setMobileSidebarOpen } = useUIStore();
-  const [showFriends, setShowFriends] = useState(false);
+  const {
+    conversations, activeConversationId, setActiveConversationId,
+    searchQuery, setSearchQuery, setConversations,
+    updateConversation, addMessage, updateMessage, removeMessage,
+    setTyping, clearTypingForConversation, clearUnread,
+  } = useChatStore();
+  const { user, token } = useAuthStore();
+  const { setFriends, setPendingRequests, setSearchOpen, setNotificationsOpen, setMobileSidebarOpen } = useUIStore();
+  const { pendingRequests } = useFriendsStore();
+  const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
   const socketRef = useRef<any>(null);
 
   const isDemo = token?.startsWith('demo-');
+  const greeting = useMemo(() => getGreeting(), []);
 
   const loadData = useCallback(async () => {
     if (isDemo) return;
@@ -74,135 +98,158 @@ export function ConversationList() {
       }
     });
 
-    socket.on('message:updated', (msg: any) => {
-      updateMessage(msg.id, msg);
-    });
+    socket.on('message:updated', (msg: any) => { updateMessage(msg.id, msg); });
+    socket.on('message:deleted', (data: any) => { removeMessage(data.id); });
+    socket.on('user:typing', (data: any) => { setTyping(data.userId, data.conversationId, data.isTyping); });
+    socket.on('message:read', (data: any) => { updateConversation(data.conversationId, { unreadCount: 0 } as Partial<Conversation>); });
 
-    socket.on('message:deleted', (data: any) => {
-      removeMessage(data.id);
-    });
-
-    socket.on('user:typing', (data: any) => {
-      setTyping(data.userId, data.conversationId, data.isTyping);
-    });
-
-    socket.on('message:read', (data: any) => {
-      updateConversation(data.conversationId, { unreadCount: 0 } as Partial<Conversation>);
-    });
-
-    return () => {
-      disconnectSocket();
-    };
+    return () => { disconnectSocket(); };
   }, [isDemo, token, loadData, activeConversationId, addMessage, updateConversation, updateMessage, removeMessage, setTyping]);
 
-  const selectConversation = (id: string) => {
+  const selectConversation = useCallback((id: string) => {
     setActiveConversationId(id);
     clearTypingForConversation(id);
     clearUnread(id);
     setMobileSidebarOpen(false);
     if (!isDemo) {
       api('/conversations/' + id + '/read', { token, method: 'POST', body: {} });
-      if (socketRef.current) {
-        socketRef.current.emit('message:read', { conversationId: id });
-      }
+      if (socketRef.current) socketRef.current.emit('message:read', { conversationId: id });
     }
-  };
-  const handleLogout = () => {
-    disconnectSocket();
-    logout();
-    setView('welcome');
-    useChatStore.getState().reset();
-    useFriendsStore.getState().reset();
-  };
+  }, [isDemo, token, activeConversationId, setActiveConversationId, clearTypingForConversation, clearUnread, setMobileSidebarOpen]);
 
-  const filtered = conversations.filter((c) => {
-    if (!searchQuery) return true;
-    const name = c.otherUser?.displayName || c.otherUser?.username || '';
-    return name.toLowerCase().includes(searchQuery.toLowerCase());
-  });
+  /* Filter logic */
+  const filtered = useMemo(() => {
+    let list = conversations;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      list = list.filter((c) => {
+        const name = c.otherUser?.displayName || c.otherUser?.username || '';
+        return name.toLowerCase().includes(q);
+      });
+    }
+    if (activeFilter === 'unread') {
+      list = list.filter((c) => (c.unreadCount ?? 0) > 0);
+    }
+    if (activeFilter === 'groups' || activeFilter === 'archived') {
+      list = [];
+    }
+    return list;
+  }, [conversations, searchQuery, activeFilter]);
 
   return (
-    <div className="flex h-full flex-col bg-surface-1 border-r border-border/50">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border/30">
-        <div className="flex items-center gap-3">
-          <Image
-            src="/logo.png"
-            alt="KIVO"
-            width={28}
-            height={28}
-            priority
-            quality={100}
-            sizes="28px"
-            className="object-contain"
-          />
-          <div>
-            <h2 className="text-sm font-semibold leading-none">Chats</h2>
-            {user && <p className="text-[11px] text-muted-foreground">@{user.username}</p>}
+    <div className="flex h-full flex-col overflow-hidden bg-background">
+      {/* ================================================================== */}
+      {/* HEADER — Greeting, Name, Bell, Avatar                            */
+      {/* ================================================================== */}
+      <header className="shrink-0 px-5 pt-6 pb-2">
+        <div className="flex items-center justify-between">
+          {/* Left — Text stack */}
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-medium leading-tight text-primary/90">
+              {greeting}
+            </p>
+            <h1 className="mt-0.5 text-[26px] font-extrabold leading-tight tracking-tight text-foreground truncate">
+              {user?.displayName?.toUpperCase() || 'USER'}
+            </h1>
+            <p className="mt-1 text-[13px] text-muted-foreground">
+              Stay connected with All.
+            </p>
+          </div>
+
+          {/* Right — Bell + Avatar */}
+          <div className="flex items-center gap-2.5 shrink-0">
+            <button
+              onClick={() => setNotificationsOpen(true)}
+              className="relative flex h-11 w-11 items-center justify-center rounded-xl bg-surface-2 text-muted-foreground transition-colors hover:text-foreground"
+              aria-label="Notifications"
+            >
+              <Bell className="h-[18px] w-[18px]" strokeWidth={1.8} />
+              {pendingRequests.length > 0 && (
+                <span className="absolute -right-0.5 -top-0.5 flex h-4.5 w-4.5 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
+                  {pendingRequests.length}
+                </span>
+              )}
+            </button>
+            <div className="relative">
+              <Avatar className="h-12 w-12 rounded-2xl">
+                <AvatarImage src={user?.avatar || undefined} />
+                <AvatarFallback className="text-base font-semibold bg-surface-2 text-foreground">
+                  {getInitials(user?.displayName || 'U')}
+                </AvatarFallback>
+              </Avatar>
+              <span className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full border-[2.5px] border-background bg-online" />
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setShowFriends(!showFriends)}
-            className="relative flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-all"
-          >
-            <Users className="h-4 w-4" />
-            {pendingRequests.length > 0 && (
-              <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-medium text-primary-foreground">
-                {pendingRequests.length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => setView('settings')}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-all"
-          >
-            <Settings className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
+      </header>
 
-      {/* Search */}
-      <div className="px-3 py-2">
+      {/* ================================================================== */}
+      {/* SEARCH BAR                                                        */
+      {/* ================================================================== */}
+      <div className="shrink-0 px-5 mt-4">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/50" />
-          <Input
-            placeholder="Search conversations..."
+          <Search className="absolute left-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-muted-foreground/50" />
+          <input
+            type="text"
+            placeholder="Search messages or people..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-9 pl-9 rounded-lg bg-surface-2 border-border/30 text-xs"
+            className="w-full h-[52px] rounded-2xl bg-surface-2 pl-12 pr-4 text-[15px] text-foreground placeholder:text-muted-foreground/60 outline-none border border-transparent transition-all duration-200 focus:border-primary/30 focus:bg-surface-3"
           />
         </div>
       </div>
 
-      {/* Friends panel */}
-      <AnimatePresence>
-        {showFriends && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden border-b border-border/30"
-          >
-            <FriendsPanel onClose={() => setShowFriends(false)} />
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* ================================================================== */
+      {/* FILTER PILLS                                                      */
+      {/* ================================================================== */}
+      <div className="shrink-0 mt-3 px-5">
+        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+          {FILTER_TABS.map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveFilter(tab.key)}
+              className={`shrink-0 rounded-full px-4 py-2 text-[13px] font-medium transition-all duration-200 ${
+                activeFilter === tab.key
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'bg-surface-2 text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
-      {/* Conversation list */}
-      <ScrollArea className="flex-1">
-        <div className="px-2 py-1">
-          {filtered.length === 0 && !showFriends && (
+      {/* ================================================================== */
+      {/* SECTION HEADER + CONVERSATION LIST                                */
+      {/* ================================================================== */}
+      <div className="flex min-h-0 flex-1 flex-col px-5 mt-4 pb-20 md:pb-2">
+        <div className="shrink-0 mb-1">
+          <h2 className="text-xl font-bold text-foreground">Chats</h2>
+          <p className="mt-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/60">
+            Recent Conversations
+          </p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto mt-3 pb-2 space-y-2.5">
+          {filtered.length === 0 && (
             <div className="flex flex-col items-center justify-center py-16 text-center">
-              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-surface-2">
-                <Plus className="h-5 w-5 text-muted-foreground/50" />
+              <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-2">
+                <MessageSquarePlus className="h-6 w-6 text-muted-foreground/40" />
               </div>
-              <p className="text-sm font-medium text-muted-foreground">No conversations yet</p>
-              <p className="mt-1 text-xs text-muted-foreground/60">
-                Add friends to start chatting
+              <p className="text-sm font-medium text-muted-foreground">
+                {activeFilter === 'groups'
+                  ? 'No groups yet'
+                  : activeFilter === 'archived'
+                    ? 'No archived chats'
+                    : 'No conversations yet'}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground/50">
+                {activeFilter === 'all' ? 'Add friends to start chatting' : 'Try a different filter'}
               </p>
             </div>
           )}
+
           {filtered.map((conv) => {
             const other = conv.otherUser;
             const isActive = conv.id === activeConversationId;
@@ -210,69 +257,57 @@ export function ConversationList() {
               <motion.button
                 key={conv.id}
                 onClick={() => selectConversation(conv.id)}
-                className={`w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all mb-0.5 ${
-                  isActive ? 'bg-primary/10' : 'hover:bg-surface-hover'
+                className={`w-full flex items-center gap-3.5 rounded-2xl px-4 py-3.5 text-left transition-all duration-200 ${
+                  isActive
+                    ? 'bg-primary/10 ring-1 ring-primary/20'
+                    : 'bg-surface-1 hover:bg-surface-hover'
                 }`}
                 whileTap={{ scale: 0.98 }}
               >
+                {/* Avatar */}
                 <div className="relative shrink-0">
-                  <Avatar className="h-11 w-11">
-                    <AvatarImage src={other?.avatar || undefined} />
-                    <AvatarFallback className="text-sm bg-primary/10 text-primary">
-                      {getInitials(other?.displayName || '?')}
-                    </AvatarFallback>
-                  </Avatar>
+                  <div className="flex h-[52px] w-[52px] items-center justify-center rounded-2xl overflow-hidden bg-surface-2">
+                    <Avatar className="h-full w-full rounded-2xl">
+                      <AvatarImage src={other?.avatar || undefined} />
+                      <AvatarFallback className="text-base font-semibold bg-surface-2 text-foreground">
+                        {getInitials(other?.displayName || '?')}
+                      </AvatarFallback>
+                    </Avatar>
+                  </div>
                   {other?.online && (
-                    <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-surface-1 bg-online" />
+                    <span className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-[2.5px] border-surface-1 bg-online" />
                   )}
                 </div>
+
+                {/* Content */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium truncate">
+                    <span className="text-[15px] font-semibold truncate text-foreground">
                       {other?.displayName || other?.username || 'Unknown'}
                     </span>
                     {conv.lastMessage && (
-                      <span className="text-[10px] text-muted-foreground/60 shrink-0 ml-2">
-                        {formatTime(conv.lastMessage.createdAt)}
+                      <span className="text-[12px] text-muted-foreground/60 shrink-0 ml-2">
+                        {formatTimestamp(conv.lastMessage.createdAt)}
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center justify-between mt-0.5">
-                    <p className="text-xs text-muted-foreground truncate">
-                      {conv.lastMessage?.deleted
-                        ? 'Message deleted'
-                        : conv.lastMessage?.content || 'No messages yet'}
-                    </p>
-                    {(conv.unreadCount ?? 0) > 0 && (
-                      <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-medium text-primary-foreground ml-2">
-                        {conv.unreadCount}
-                      </span>
-                    )}
-                  </div>
+                  <p className="mt-0.5 text-[13px] text-muted-foreground truncate leading-snug">
+                    {conv.lastMessage?.deleted
+                      ? 'Message deleted'
+                      : conv.lastMessage?.content || 'Tap to start chatting'}
+                  </p>
                 </div>
+
+                {/* Unread badge */}
+                {(conv.unreadCount ?? 0) > 0 && (
+                  <span className="flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full bg-primary px-2 text-[11px] font-bold text-primary-foreground">
+                    {conv.unreadCount}
+                  </span>
+                )}
               </motion.button>
             );
           })}
         </div>
-      </ScrollArea>
-
-      {/* Bottom nav (mobile) */}
-      <div className="flex items-center justify-around border-t border-border/30 py-2 md:hidden">
-        <button onClick={() => setView('chat')} className="flex flex-col items-center gap-0.5 text-primary">
-          <Users className="h-5 w-5" />
-          <span className="text-[10px]">Chats</span>
-        </button>
-        <button
-          onClick={() => setView('settings')}
-          className="flex flex-col items-center gap-0.5 text-muted-foreground"
-        >
-          <UserCircle className="h-5 w-5" />
-          <span className="text-[10px]">Profile</span>
-        </button>
-        <button onClick={handleLogout} className="flex flex-col items-center gap-0.5 text-muted-foreground">
-          <LogOut className="h-5 w-5" />
-          <span className="text-[10px]">Logout</span>
-        </button>
       </div>
     </div>
   );
