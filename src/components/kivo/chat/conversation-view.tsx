@@ -41,6 +41,8 @@ export function ConversationView() {
   // Load messages when conversation changes
   useEffect(() => {
     if (!activeConversationId || !token) return;
+    const isDemo = token.startsWith('demo-');
+    if (isDemo) return;
     let cancelled = false;
     (async () => {
       try {
@@ -119,6 +121,7 @@ export function ConversationView() {
   };
 
   const deleteMessage = async (msgId: string) => {
+    if (token?.startsWith('demo-')) { toast.info('Demo mode'); return; }
     try {
       await api('/messages/' + msgId, { token, method: 'DELETE' });
       updateMessage(msgId, { content: 'This message was deleted', deleted: true } as Partial<Message>);
@@ -127,6 +130,7 @@ export function ConversationView() {
 
   const blockUser = async () => {
     if (!otherUser) return;
+    if (token?.startsWith('demo-')) { toast.info('Demo mode'); return; }
     try {
       await api('/blocks/block', { token, body: { userId: otherUser.id } });
       toast.success(`${otherUser.displayName} has been blocked`);

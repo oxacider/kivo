@@ -38,7 +38,10 @@ export function ConversationList() {
   const [showFriends, setShowFriends] = useState(false);
   const socketRef = useRef<any>(null);
 
+  const isDemo = token?.startsWith('demo-');
+
   const loadData = useCallback(async () => {
+    if (isDemo) return;
     try {
       const convs = await api<Conversation[]>('/conversations', { token });
       setConversations(convs);
@@ -49,10 +52,11 @@ export function ConversationList() {
     } catch (err: any) {
       toast.error(err.message);
     }
-  }, [token, setConversations, setFriends, setPendingRequests]);
+  }, [isDemo, token, setConversations, setFriends, setPendingRequests]);
 
   useEffect(() => {
     if (!token) return;
+    if (isDemo) return;
     loadData();
     const socket = connectSocket(user!.id);
     socketRef.current = socket;
@@ -89,19 +93,20 @@ export function ConversationList() {
     return () => {
       disconnectSocket();
     };
-  }, [token, loadData, activeConversationId, addMessage, updateConversation, updateMessage, removeMessage, setTyping]);
+  }, [isDemo, token, loadData, activeConversationId, addMessage, updateConversation, updateMessage, removeMessage, setTyping]);
 
   const selectConversation = (id: string) => {
     setActiveConversationId(id);
     clearTypingForConversation(id);
     clearUnread(id);
     setMobileSidebarOpen(false);
-    api('/conversations/' + id + '/read', { token, method: 'POST', body: {} });
-    if (socketRef.current) {
-      socketRef.current.emit('message:read', { conversationId: id });
+    if (!isDemo) {
+      api('/conversations/' + id + '/read', { token, method: 'POST', body: {} });
+      if (socketRef.current) {
+        socketRef.current.emit('message:read', { conversationId: id });
+      }
     }
   };
-
   const handleLogout = () => {
     disconnectSocket();
     logout();

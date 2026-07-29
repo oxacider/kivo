@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { useAuthStore } from '@/stores/auth-store';
 import { useUIStore } from '@/stores/ui-store';
 import { api } from '@/lib/api';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { ArrowLeft, Loader2, FlaskConical } from 'lucide-react';
 import { toast } from 'sonner';
 import type { User } from '@/types';
 import Image from 'next/image';
@@ -126,6 +126,42 @@ export function SignInForm() {
             {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Sign In
           </Button>
+
+          {/* Demo Login */}
+          <div className="relative my-5">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t border-border/40" />
+            </div>
+            <div className="relative flex justify-center text-xs">
+              <span className="bg-background px-3 text-muted-foreground/60">or</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setUser({
+                id: 'demo-user-001',
+                email: 'demo@kivo.app',
+                displayName: 'Demo User',
+                username: 'demouser',
+                avatar: '',
+                bio: '',
+                status: '',
+                online: true,
+                lastSeen: new Date().toISOString(),
+                theme: 'dark',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              });
+              setToken('demo-token-mock');
+              setView('chat');
+              toast.success('Welcome to KIVO Demo!');
+            }}
+            className="w-full flex items-center justify-center gap-2 h-11 text-sm font-medium rounded-xl bg-surface-1 border border-border/50 text-foreground hover:bg-surface-hover transition-colors"
+          >
+            <FlaskConical className="h-4 w-4 text-primary" />
+            Sign In with Demo Account
+          </button>
         </form>
 
         <p className="mt-8 text-center text-sm text-muted-foreground">

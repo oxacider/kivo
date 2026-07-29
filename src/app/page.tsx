@@ -51,6 +51,8 @@ export default function Home() {
 
   useEffect(() => {
     if (user && token && currentView !== 'splash') {
+      // Skip backend verification for demo tokens
+      if (token.startsWith('demo-')) return;
       api('/auth/me', { token })
         .then((u: any) => {
           setUser(u);
