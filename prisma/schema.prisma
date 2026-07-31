@@ -22,6 +22,7 @@ model User {
   showOnline       Boolean   @default(true)
   showLastSeen     Boolean   @default(true)
   showReadReceipts Boolean   @default(true)
+  tokenVersion       Int       @default(0)
   emailVerified      Boolean   @default(false)
   verificationCode   String?
   resetCode          String?

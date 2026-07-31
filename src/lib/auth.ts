@@ -3,14 +3,23 @@ import { signToken, verifyToken } from '@/lib/jwt';
 import type { User } from '@/types';
 
 /* ------------------------------------------------------------------ */
-/*  Token blocklist — invalidated tokens (logout, password change)  */
+/*  Token blocklist — invalidated tokens (logout)                        */
 /* ------------------------------------------------------------------ */
 
 const blocklist = new Set<string>();
+const MAX_BLOCKLIST_SIZE = 100_000;
 
 /** Add a token to the blocklist (called on logout). */
 export function invalidateToken(token: string) {
   blocklist.add(token);
+  if (blocklist.size > MAX_BLOCKLIST_SIZE) {
+    const iter = blocklist.values();
+    for (let i = 0; i < 1001; i++) {
+      const { value } = iter.next();
+      if (value === undefined) break;
+      blocklist.delete(value);
+    }
+  }
 }
 
 /** Check if a token is blocked. */
@@ -22,16 +31,36 @@ export function isTokenBlocked(token: string): boolean {
 /*  Public API                                                       */
 /* ------------------------------------------------------------------ */
 
-/** Generate a signed JWT for a user ID. */
+/** Generate a signed JWT embedding the user's current tokenVersion. */
 export async function generateToken(userId: string): Promise<string> {
-  return signToken(userId);
+  const user = await db.user.findUnique({
+    where: { id: userId },
+    select: { tokenVersion: true },
+  });
+  return signToken(userId, user?.tokenVersion ?? 0);
 }
 
-/** Verify a JWT and return the userId. Returns null if invalid. */
+/**
+ * Verify a JWT and return the userId.
+ * Returns null if invalid, expired, blocked, or tokenVersion mismatch
+ * (e.g. password was changed after this token was issued).
+ */
 export async function extractUserId(token: string): Promise<string | null> {
   if (isTokenBlocked(token)) return null;
   const payload = await verifyToken(token);
-  return payload?.userId ?? null;
+  if (!payload?.userId) return null;
+
+  // Verify tokenVersion matches (catches post-password-reset tokens)
+  const tv = payload.tv;
+  if (tv !== undefined) {
+    const user = await db.user.findUnique({
+      where: { id: payload.userId },
+      select: { tokenVersion: true },
+    });
+    if (!user || user.tokenVersion !== tv) return null;
+  }
+
+  return payload.userId;
 }
 
 /**

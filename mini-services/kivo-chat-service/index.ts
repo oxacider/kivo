@@ -17,7 +17,20 @@ const secretKey = new TextEncoder().encode(JWT_SECRET)
 async function verifySocketToken(token: string): Promise<string | null> {
   try {
     const { payload } = await jose.jwtVerify(token, secretKey, { algorithms: ['HS256'] })
-    return (payload as { userId?: string }).userId ?? null
+    const userId = (payload as { userId?: string }).userId ?? null
+    if (!userId) return null
+
+    // Verify tokenVersion matches (invalidates sessions after password reset)
+    const tv = (payload as { tv?: number }).tv
+    if (tv !== undefined) {
+      const user = await db.user.findUnique({
+        where: { id: userId },
+        select: { tokenVersion: true },
+      })
+      if (!user || user.tokenVersion !== tv) return null
+    }
+
+    return userId
   } catch {
     return null
   }

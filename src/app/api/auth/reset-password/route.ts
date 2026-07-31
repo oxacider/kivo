@@ -11,7 +11,7 @@ export async function POST(request: Request) {
 
     const user = await db.user.findUnique({
       where: { email },
-      select: { id: true, resetCode: true, resetCodeExpires: true },
+      select: { id: true, tokenVersion: true, resetCode: true, resetCodeExpires: true },
     });
     if (!user) return errorResponse('Invalid email or code', 404);
 
@@ -27,6 +27,7 @@ export async function POST(request: Request) {
       where: { id: user.id },
       data: {
         password: hashedPassword,
+        tokenVersion: (user.tokenVersion ?? 0) + 1,
         resetCode: null,
         resetCodeExpires: null,
       },

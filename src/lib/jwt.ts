@@ -17,13 +17,14 @@ function getSecret(): Uint8Array {
 
 export interface JWTPayload {
   userId: string;
+  tv?: number;
   iat?: number;
   exp?: number;
 }
 
-/** Sign a JWT with the user's ID. Returns the encoded token string. */
-export async function signToken(userId: string): Promise<string> {
-  return new SignJWT({ userId })
+/** Sign a JWT with the user's ID and tokenVersion. Returns the encoded token string. */
+export async function signToken(userId: string, tokenVersion: number = 0): Promise<string> {
+  return new SignJWT({ userId, tv: tokenVersion })
     .setProtectedHeader({ alg: JWT_ALGORITHM })
     .setIssuedAt()
     .setExpirationTime(JWT_EXPIRY)
