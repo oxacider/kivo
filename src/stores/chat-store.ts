@@ -1,9 +1,13 @@
 import { create } from 'zustand';
 import type { Message, Conversation, TypingUser, Reaction, MediaAttachment } from '@/types';
+import { saveQueuedMessage, getAllQueuedMessages, removeQueuedMessage } from '@/lib/offline-queue';
+import { getSocket, isSocketConnected } from '@/lib/socket';
 
 export interface TypingUserData extends TypingUser {
   user?: { id: string; displayName: string; avatar: string } | null;
 }
+
+type NetworkStatus = 'online' | 'offline' | 'reconnecting';
 
 interface ChatState {
   conversations: Conversation[];
@@ -15,6 +19,8 @@ interface ChatState {
   hasMoreMessages: boolean;
   isLoadingConversations: boolean;
   searchQuery: string;
+  networkStatus: NetworkStatus;
+  isSyncing: boolean;
   setConversations: (conversations: Conversation[]) => void;
   addConversation: (conversation: Conversation) => void;
   updateConversation: (id: string, data: Partial<Conversation>) => void;
@@ -37,6 +43,8 @@ interface ChatState {
   addReaction: (messageId: string, reaction: Reaction) => void;
   removeReaction: (messageId: string, userId: string, emoji: string) => void;
   setMessageStatus: (messageId: string, status: Message['status']) => void;
+  setNetworkStatus: (status: NetworkStatus) => void;
+  syncQueuedMessages: () => Promise<void>;
   reset: () => void;
 }
 
@@ -50,9 +58,11 @@ const initialState = {
   hasMoreMessages: false,
   isLoadingConversations: false,
   searchQuery: '',
+  networkStatus: 'online' as NetworkStatus,
+  isSyncing: false,
 };
 
-export const useChatStore = create<ChatState>()((set) => ({
+export const useChatStore = create<ChatState>()((set, get) => ({
   ...initialState,
   setConversations: (conversations) => set({ conversations }),
   addConversation: (conversation) =>
@@ -130,7 +140,6 @@ export const useChatStore = create<ChatState>()((set) => ({
       messages: state.messages.map((m) => {
         if (m.id !== messageId) return m;
         const reactions = [...(m.reactions || [])];
-        // Remove any existing reaction by this user
         const filtered = reactions.filter((r) => r.userId !== reaction.userId);
         filtered.push(reaction);
         return { ...m, reactions: filtered };
@@ -154,5 +163,41 @@ export const useChatStore = create<ChatState>()((set) => ({
         m.id === messageId ? { ...m, status } : m
       ),
     })),
+  setNetworkStatus: (networkStatus) => set({ networkStatus }),
+  syncQueuedMessages: async () => {
+    const state = get();
+    if (state.isSyncing) return;
+    if (!isSocketConnected()) return;
+
+    let queued: { tempId: string; conversationId: string; content: string; type: string; replyToId: string | null; attachmentId?: string }[];
+    try {
+      queued = await getAllQueuedMessages();
+    } catch {
+      return;
+    }
+    if (queued.length === 0) return;
+
+    set({ isSyncing: true });
+    const socket = getSocket();
+
+    for (const msg of queued) {
+      // Update local status to 'sending'
+      get().setMessageStatus(msg.tempId, 'sending');
+
+      const emitPayload: Record<string, unknown> = {
+        conversationId: msg.conversationId,
+        content: msg.content,
+        type: msg.type,
+        replyToId: msg.replyToId,
+      };
+      if (msg.attachmentId) emitPayload.attachmentId = msg.attachmentId;
+
+      socket.emit('message:send', emitPayload);
+      // Remove from IndexedDB (will be re-saved as 'failed' if socket fails)
+      try { await removeQueuedMessage(msg.tempId); } catch { /* ignore */ }
+    }
+
+    set({ isSyncing: false });
+  },
   reset: () => set(initialState),
 }));

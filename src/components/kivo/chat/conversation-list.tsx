@@ -7,6 +7,7 @@ import { useFriendsStore } from '@/stores/friends-store';
 import { useUIStore } from '@/stores/ui-store';
 import { api } from '@/lib/api';
 import { connectSocket, disconnectSocket } from '@/lib/socket';
+import { getAllQueuedMessages } from '@/lib/offline-queue';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Search, Bell, MessageSquarePlus } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -54,6 +55,7 @@ export function ConversationList() {
     searchQuery, setSearchQuery, setConversations,
     updateConversation, addMessage, updateMessage, removeMessage,
     setTyping, clearTypingForConversation, clearUnread, addReaction, removeReaction,
+    setNetworkStatus, syncQueuedMessages,
   } = useChatStore();
   const { user, token } = useAuthStore();
   const { setSearchOpen, setNotificationsOpen, setMobileSidebarOpen } = useUIStore();
@@ -105,7 +107,7 @@ export function ConversationList() {
     };
     const onMessageFailed = (data: any) => {
       const msgs = useChatStore.getState().messages;
-      const sending = msgs.find(m => m.status === 'sending' && m.conversationId === data.conversationId);
+      const sending = msgs.find(m => (m.status === 'sending' || m.status === 'queued') && m.conversationId === data.conversationId);
       if (sending) {
         updateMessage(sending.id, { status: 'failed' });
       }
@@ -129,6 +131,45 @@ export function ConversationList() {
     socket.on('user:typing', onUserTyping);
     socket.on('message:read', onMessageRead);
 
+    // Network awareness + auto-sync on reconnect
+    const handleOnline = () => { setNetworkStatus('online'); syncQueuedMessages(); };
+    const handleOffline = () => setNetworkStatus('offline');
+    const handleReconnect = () => { setNetworkStatus('reconnecting'); };
+    const handleReconnectFail = () => setNetworkStatus('offline');
+    const handleConnect = () => { setNetworkStatus('online'); syncQueuedMessages(); };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    socket.on('reconnect', handleReconnect);
+    socket.on('reconnect_attempt', handleReconnect);
+    socket.on('reconnect_failed', handleReconnectFail);
+    socket.on('connect', handleConnect);
+
+    // Restore queued messages from IndexedDB into store on mount
+    (async () => {
+      try {
+        const queued = await getAllQueuedMessages();
+        for (const q of queued) {
+          const msg: import('@/types').Message = {
+            id: q.tempId,
+            conversationId: q.conversationId,
+            senderId: q.senderId,
+            content: q.content,
+            type: q.type as any,
+            status: 'queued',
+            replyToId: q.replyToId,
+            edited: false,
+            deleted: false,
+            createdAt: q.createdAt,
+            updatedAt: q.updatedAt,
+            sender: q.sender,
+            replyTo: q.replyTo ?? null,
+            attachments: q.attachments,
+          };
+          useChatStore.getState().addMessage(msg);
+        }
+      } catch { /* IndexedDB unavailable */ }
+    })();
+
     return () => {
       socket.off('message:new', onMessageNew);
       socket.off('message:updated', onMessageUpdated);
@@ -138,8 +179,14 @@ export function ConversationList() {
       socket.off('reaction:update', onReactionUpdate);
       socket.off('user:typing', onUserTyping);
       socket.off('message:read', onMessageRead);
+      socket.off('reconnect', handleReconnect);
+      socket.off('reconnect_attempt', handleReconnect);
+      socket.off('reconnect_failed', handleReconnectFail);
+      socket.off('connect', handleConnect);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
     };
-  }, [isDemo, token, loadData, addMessage, updateConversation, updateMessage, removeMessage, addReaction, removeReaction, setTyping]);
+  }, [isDemo, token, loadData, addMessage, updateConversation, updateMessage, removeMessage, addReaction, removeReaction, setTyping, setNetworkStatus, syncQueuedMessages]);
 
   const selectConversation = useCallback((id: string) => {
     setActiveConversationId(id);

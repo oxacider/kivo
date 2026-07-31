@@ -417,3 +417,27 @@ Stage Summary:
 - Production build: compiled successfully
 - Dev server: HTTP 200
 - Pagination: 30 messages per page, cursor-based, auto-load on scroll-up, scroll position preserved, duplicate prevention via ID Set
+
+---
+Task ID: phase4-pagination-fix
+Agent: main
+Task: Fix critical API sort order bug and enhance pagination UX
+
+Work Log:
+- **Critical bug fix**: API `orderBy: 'asc'` returned oldest messages instead of latest. Changed to `orderBy: 'desc'` + `reverse()` to correctly return the most recent 30 messages on initial load and the 30 just-older messages on load-more
+- Added `DateDivider` component: renders contextual date labels ("Today", "Yesterday", or "MMMM d, yyyy") between messages on different calendar days
+- Replaced single static date divider at top with per-day dividers using React.Fragment with keys in message map
+- Added "Scroll to bottom" floating button (ArrowDown icon, Framer Motion animate, appears when user scrolls up past 80px from bottom)
+- Made messages area `relative` positioned to anchor the scroll-to-bottom button
+- Improved initial load: uses `requestAnimationFrame` with instant `scrollTop = scrollHeight` instead of smooth scroll, preventing visual jump
+- Added `initialLoadDoneRef` to track initial load completion
+- Fixed JSX comment syntax bug (`{/* ... */` missing closing `}`) that caused TS1005 parse error
+- Added `ArrowDown` to lucide-react imports
+
+Stage Summary:
+- Files modified: `src/app/api/conversations/[id]/messages/route.ts`, `src/components/kivo/chat/conversation-view.tsx`
+- 2 files modified, 0 new files
+- TypeScript: 0 errors
+- ESLint: 0 errors, 0 warnings
+- Dev server: compiles and serves 200 successfully
+- All existing features intact: optimistic sending, socket realtime, reactions, delivery/read status, image attachments, typing indicator, offline queue

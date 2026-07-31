@@ -23,7 +23,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       where.createdAt = { lt: new Date(before) };
     }
 
-    // Fetch PAGE_SIZE + 1 to determine if more pages exist
+    // Fetch PAGE_SIZE + 1 in DESC order to get the latest/most-recent messages
     const fetched = await db.message.findMany({
       where,
       include: {
@@ -36,12 +36,14 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
         },
         attachments: true,
       },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'desc' },
       take: PAGE_SIZE + 1,
     });
 
     const hasMore = fetched.length > PAGE_SIZE;
-    const messages = hasMore ? fetched.slice(0, PAGE_SIZE) : fetched;
+    const sliced = hasMore ? fetched.slice(0, PAGE_SIZE) : fetched;
+    // Reverse to ascending order for display
+    const messages = sliced.reverse();
 
     // Auto-deliver messages on fetch
     await db.message.updateMany({

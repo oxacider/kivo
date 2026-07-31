@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
@@ -12,18 +12,63 @@ import {
   Send, Smile, MoreHorizontal, ArrowLeft, Check, CheckCheck,
   Edit3, Trash2, X, CornerDownRight, UserX, Forward, Search,
   Copy, RotateCcw, ImageIcon, Paperclip, Mic, Clock,
-  AlertCircle, Sparkles, Loader2, Upload
+  AlertCircle, Sparkles, Loader2, Upload, WifiOff, ArrowDown
 } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
-import { getSocket } from '@/lib/socket';
-import type { Message, Reaction, PendingImage, MediaAttachment } from '@/types';
+import { getSocket, isSocketConnected } from '@/lib/socket';
+import { saveQueuedMessage } from '@/lib/offline-queue';
+import type { Message, Reaction, PendingImage, MediaAttachment, QueuedMessage } from '@/types';
 
 function getInitials(name: string) { return name.slice(0, 2).toUpperCase(); }
+
+// --- Offline Banner ---
+function OfflineBanner() {
+  const { networkStatus, isSyncing } = useChatStore();
+  if (networkStatus === 'online') return null;
+  return (
+    <motion.div
+      initial={{ height: 0, opacity: 0 }}
+      animate={{ height: 'auto', opacity: 1 }}
+      exit={{ height: 0, opacity: 0 }}
+      className="flex items-center justify-center gap-2 bg-amber-500/90 px-4 py-1.5 text-[11px] font-medium text-white"
+    >
+      {networkStatus === 'reconnecting' ? (
+        <><WifiOff className="h-3.5 w-3.5" /> Reconnecting{isSyncing ? ' and syncing...' : ''}</>
+      ) : (
+        <><WifiOff className="h-3.5 w-3.5" /> You're offline — messages will be sent when connected</>
+      )}
+    </motion.div>
+  );
+}
 
 const EMOJI_LIST = ['😊','😂','❤️','👍','🎉','🔥','💯','✨','🙌','😍','🤔','😅','👋','🥳','😎','🤝','💪','🫡','💕','🥰','😀','🥺','😢','😭'];
 
 const QUICK_REACTIONS = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
+
+function DateDivider({ date }: { date: string }) {
+  const d = new Date(date);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  let label: string;
+  if (d.toDateString() === today.toDateString()) {
+    label = 'Today';
+  } else if (d.toDateString() === yesterday.toDateString()) {
+    label = 'Yesterday';
+  } else {
+    label = format(d, 'MMMM d, yyyy');
+  }
+
+  return (
+    <div className="flex items-center justify-center my-3">
+      <span className="rounded-full bg-surface-2 px-3 py-1 text-[10px] text-muted-foreground/70 font-medium">
+        {label}
+      </span>
+    </div>
+  );
+}
 
 function formatLastSeen(dateStr: string): string {
   try {
@@ -37,6 +82,9 @@ function formatLastSeen(dateStr: string): string {
 function MessageStatus({ status, className = '' }: { status: Message['status']; className?: string }) {
   if (status === 'failed') {
     return <AlertCircle className={`h-3.5 w-3.5 text-destructive ${className}`} />;
+  }
+  if (status === 'queued') {
+    return <Clock className={`h-3.5 w-3.5 text-amber-500 ${className}`} />;
   }
   if (status === 'sending') {
     return <div className={`flex items-center gap-0.5 ${className}`}>
@@ -255,7 +303,7 @@ function UploadProgressBar({ progress }: { progress: number }) {
 }
 
 export function ConversationView() {
-  const { activeConversationId, conversations, messages, setMessages, prependMessages, addMessage, updateMessage, removeMessage, typingUsers, setActiveConversationId, updateConversation, addReaction, removeReaction, setMessageStatus, hasMoreMessages, isLoadingMoreMessages, setLoadingMoreMessages, setHasMoreMessages } = useChatStore();
+  const { activeConversationId, conversations, messages, setMessages, prependMessages, addMessage, updateMessage, removeMessage, typingUsers, setActiveConversationId, updateConversation, addReaction, removeReaction, setMessageStatus, hasMoreMessages, isLoadingMoreMessages, setLoadingMoreMessages, setHasMoreMessages, networkStatus, isSyncing } = useChatStore();
   const { user, token } = useAuthStore();
   const [input, setInput] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
@@ -354,7 +402,7 @@ export function ConversationView() {
       // Batch: mark all sent/delivered/sending messages as read in one update
       const msgs = useChatStore.getState().messages;
       const updates = msgs
-        .filter(m => m.senderId === user?.id && (m.status === 'sent' || m.status === 'delivered' || m.status === 'sending'))
+        .filter(m => m.senderId === user?.id && (m.status === 'sent' || m.status === 'delivered' || m.status === 'sending' || m.status === 'queued'))
         .map(m => ({ id: m.id, status: 'read' as const }));
       if (updates.length > 0) {
         useChatStore.setState((state) => ({
@@ -370,9 +418,9 @@ export function ConversationView() {
       // Replace optimistic sending message with the real server message
       const msgs = useChatStore.getState().messages;
       // For text messages: match by content
-      const textMatch = msgs.find(m => m.status === 'sending' && m.conversationId === msg.conversationId && m.content === msg.content && m.senderId === msg.senderId && !m.attachments?.length);
+      const textMatch = msgs.find(m => (m.status === 'sending' || m.status === 'queued') && m.conversationId === msg.conversationId && m.content === msg.content && m.senderId === msg.senderId && !m.attachments?.length);
       // For image messages: match by type + sender + conversation + no real id
-      const imageMatch = msgs.find(m => m.status === 'sending' && m.conversationId === msg.conversationId && m.type === 'image' && m.senderId === msg.senderId && m.id.startsWith('temp-'));
+      const imageMatch = msgs.find(m => (m.status === 'sending' || m.status === 'queued') && m.conversationId === msg.conversationId && m.type === 'image' && m.senderId === msg.senderId && m.id.startsWith('temp-'));
       const sending = textMatch || imageMatch;
       if (sending && sending.id.startsWith('temp-')) {
         // Remove the temp message, the real one will be added by the store's addMessage
@@ -401,11 +449,15 @@ export function ConversationView() {
     };
   }, [token, activeConversationId, user?.id, updateMessage, removeMessage, addReaction, removeReaction]);
 
+  // Track whether this is the initial load for current conversation (for instant scroll)
+  const initialLoadDoneRef = useRef(false);
+
   // Load latest 30 messages when conversation changes
   useEffect(() => {
     if (!activeConversationId || !token) return;
     const isDemo = token.startsWith('demo-');
     if (isDemo) return;
+    initialLoadDoneRef.current = false;
     let cancelled = false;
     (async () => {
       try {
@@ -416,6 +468,14 @@ export function ConversationView() {
         if (!cancelled) {
           setMessages(result.messages);
           setHasMoreMessages(result.hasMore);
+          // Instant scroll to bottom on initial load (not smooth)
+          requestAnimationFrame(() => {
+            const el = scrollRef.current;
+            if (el) {
+              el.scrollTop = el.scrollHeight;
+              initialLoadDoneRef.current = true;
+            }
+          });
         }
       } catch (err: any) { if (!cancelled) toast.error(err.message); }
     })();
@@ -440,24 +500,26 @@ export function ConversationView() {
 
   const sendMessage = useCallback(() => {
     if (!input.trim() || !activeConversationId) return;
-    const socket = getSocket();
     const content = input.trim();
     const replyId = replyTo?.id || null;
 
-    // Optimistic local message
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const now = new Date().toISOString();
+    const isOnline = isSocketConnected();
+    const status: Message['status'] = isOnline ? 'sending' : 'queued';
+
     const optimisticMsg: Message = {
       id: tempId,
       conversationId: activeConversationId,
       senderId: user?.id || '',
       content,
       type: 'text',
-      status: 'sending',
+      status,
       replyToId: replyId,
       edited: false,
       deleted: false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
       sender: user ? { id: user.id, email: user.email, displayName: user.displayName, username: user.username, avatar: user.avatar, bio: user.bio, status: user.status, online: user.online, lastSeen: user.lastSeen, theme: user.theme, emailVerified: user.emailVerified, showOnline: user.showOnline, showLastSeen: user.showLastSeen, showReadReceipts: user.showReadReceipts, createdAt: user.createdAt, updatedAt: user.updatedAt } : undefined,
       replyTo: replyTo ? { id: replyTo.id, conversationId: replyTo.conversationId, senderId: replyTo.senderId, content: replyTo.content, type: replyTo.type, status: replyTo.status, replyToId: replyTo.replyToId, edited: replyTo.edited, deleted: replyTo.deleted, createdAt: replyTo.createdAt, updatedAt: replyTo.updatedAt } : null,
     };
@@ -468,17 +530,32 @@ export function ConversationView() {
     setShowEmoji(false);
     if (inputRef.current) inputRef.current.style.height = 'auto';
 
-    // Stop typing
-    socket.emit('typing:stop', { conversationId: activeConversationId });
-    if (typingTimeout.current) clearTimeout(typingTimeout.current);
-
-    // Emit to server
-    socket.emit('message:send', {
-      conversationId: activeConversationId,
-      content,
-      type: 'text',
-      replyToId: replyId,
-    });
+    if (isOnline) {
+      const socket = getSocket();
+      socket.emit('typing:stop', { conversationId: activeConversationId });
+      if (typingTimeout.current) clearTimeout(typingTimeout.current);
+      socket.emit('message:send', {
+        conversationId: activeConversationId,
+        content,
+        type: 'text',
+        replyToId: replyId,
+      });
+    } else {
+      // Offline: persist to IndexedDB for later sync
+      const queued: QueuedMessage = {
+        tempId,
+        conversationId: activeConversationId,
+        content,
+        type: 'text',
+        replyToId: replyId,
+        senderId: user?.id || '',
+        sender: optimisticMsg.sender,
+        replyTo: optimisticMsg.replyTo,
+        createdAt: now,
+        updatedAt: now,
+      };
+      saveQueuedMessage(queued).catch(() => {});
+    }
   }, [input, activeConversationId, replyTo, user, addMessage]);
 
   // --- Image selection handler ---
@@ -839,7 +916,9 @@ export function ConversationView() {
       </AnimatePresence>
 
       {/* ========== MESSAGES AREA ========== */}
-      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
+      <div ref={scrollRef} onScroll={handleScroll} className="relative flex-1 overflow-y-auto">
+        {/* Offline banner */}
+        <OfflineBanner />
         <div className="mx-auto max-w-2xl px-4 py-4">
           {/* Loading older messages indicator */}
           {isLoadingMoreMessages && (
@@ -858,27 +937,25 @@ export function ConversationView() {
             </div>
           )}
 
-          {/* Date divider */}
-          {messages.length > 0 && (
-            <div className="mb-4 flex items-center justify-center">
-              <span className="rounded-full bg-surface-2 px-3 py-1 text-[10px] text-muted-foreground">
-                {format(new Date(messages[0].createdAt), 'MMMM d, yyyy')}
-              </span>
-            </div>
-          )}
-
           {filteredMessages.map((msg, i) => {
             const isMine = msg.senderId === user?.id;
-            const showAvatar = !isMine && (i === 0 || filteredMessages[i - 1]?.senderId !== msg.senderId);
+            const prevMsg = i > 0 ? filteredMessages[i - 1] : null;
+            const showAvatar = !isMine && (i === 0 || prevMsg?.senderId !== msg.senderId);
             const isLast = i === filteredMessages.length - 1 || filteredMessages[i + 1]?.senderId !== msg.senderId;
             const isFailed = msg.status === 'failed';
             const isSending = msg.status === 'sending';
             const repliedMsg = msg.replyTo;
             const showQuickReact = quickReactMsgId === msg.id;
 
+            // Date divider: show when message date differs from previous
+            const prevDate = prevMsg ? new Date(prevMsg.createdAt).toDateString() : null;
+            const currDate = new Date(msg.createdAt).toDateString();
+            const showDateDivider = prevDate !== currDate;
+
             return (
-              <motion.div
-                key={msg.id}
+              <Fragment key={msg.id}>
+                {showDateDivider && <DateDivider date={msg.createdAt} />}
+                <motion.div
                 initial={isMine ? { opacity: 0, y: 12, scale: 0.95 } : { opacity: 0, x: -8, scale: 0.97 }}
                 animate={{ opacity: 1, y: 0, x: 0, scale: 1 }}
                 transition={{ duration: isMine ? 0.35 : 0.3, ease: [0.16, 1, 0.3, 1] }}
@@ -1049,6 +1126,7 @@ export function ConversationView() {
                   )}
                 </div>
               </motion.div>
+              </Fragment>
             );
           })}
 
@@ -1089,6 +1167,22 @@ export function ConversationView() {
             )}
           </AnimatePresence>
         </div>
+
+        {/* Scroll to bottom button */}
+        <AnimatePresence>
+          {!wasAtBottom && messages.length > 0 && (
+            <motion.button
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.8 }}
+              transition={{ duration: 0.2 }}
+              onClick={() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })}
+              className="absolute bottom-4 right-4 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-primary/90 text-primary-foreground shadow-lg hover:bg-primary transition-colors"
+            >
+              <ArrowDown className="h-4 w-4" />
+            </motion.button>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* ========== REPLY PREVIEW BAR ========== */}

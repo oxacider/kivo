@@ -32,7 +32,7 @@ export interface Message {
   senderId: string;
   content: string;
   type: 'text' | 'image' | 'video' | 'file' | 'voice' | 'system';
-  status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'deleted';
+  status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'queued' | 'deleted';
   replyToId: string | null;
   edited: boolean;
   deleted: boolean;
@@ -111,4 +111,19 @@ export interface PendingImage {
   mimeType: string;
   name: string;
   size: number;
+}
+
+export interface QueuedMessage {
+  tempId: string;
+  conversationId: string;
+  content: string;
+  type: string;
+  replyToId: string | null;
+  attachmentId?: string;
+  senderId: string;
+  sender?: User;
+  replyTo?: Message | null;
+  attachments?: MediaAttachment[];
+  createdAt: string;
+  updatedAt: string;
 }

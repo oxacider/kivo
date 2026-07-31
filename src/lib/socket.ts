@@ -19,7 +19,6 @@ export function getSocket(): Socket {
 export function connectSocket(token: string): Socket {
   const s = getSocket();
   if (!s.connected) {
-    // Pass JWT in handshake auth — server middleware verifies before accepting
     s.auth = { token };
     s.connect();
   }
@@ -30,4 +29,8 @@ export function disconnectSocket() {
   if (socket?.connected) {
     socket.disconnect();
   }
+}
+
+export function isSocketConnected(): boolean {
+  return socket?.connected ?? false;
 }
