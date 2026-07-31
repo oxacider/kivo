@@ -54,7 +54,7 @@ export const useFriendsStore = create<FriendsState>()((set) => ({
   updateRequestStatus: (id, status) =>
     set((state) => ({
       pendingRequests: state.pendingRequests.map((r) =>
-        r.id === id ? { ...r, status } : r
+        r.id === id ? { ...r, status: status as Friendship['status'] } : r
       ),
     })),
   removeRequest: (id) =>

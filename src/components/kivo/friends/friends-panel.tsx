@@ -28,7 +28,7 @@ export function FriendsPanel({ onClose }: Props) {
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState<'friends' | 'requests' | 'add' | 'blocked'>('friends');
   const [blockedUsers, setBlockedUsers] = useState<User[]>([]);
-  const debounceRef = useRef<NodeJS.Timeout>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const searchUsers = async (q: string) => {
     if (q.length < 2) { setSearchResults([]); return; }
@@ -48,9 +48,9 @@ export function FriendsPanel({ onClose }: Props) {
 
   const sendRequest = async (receiverId: string) => {
     try {
-      const req = await api<Friendship>('/friends/request', { token, body: { receiverId } });
-      addSentRequest(req);
-      setSearchResults((r) => r.filter((u) => u.id !== receiverId));
+      const results = await api<Friendship>('/friends/request', { token, body: { receiverId } });
+      addSentRequest(results);
+      setSearchResults(searchResults.filter((u: User) => u.id !== receiverId));
       toast.success('Friend request sent');
     } catch (err: any) { toast.error(err.message); }
   };

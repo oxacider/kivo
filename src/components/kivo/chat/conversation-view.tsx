@@ -32,7 +32,7 @@ export function ConversationView() {
   const [searchMsg, setSearchMsg] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const typingTimeout = useRef<NodeJS.Timeout>();
+  const typingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activeConv = conversations.find((c) => c.id === activeConversationId);
   const otherUser = activeConv?.otherUser;
@@ -75,7 +75,7 @@ export function ConversationView() {
     if (inputRef.current) inputRef.current.style.height = 'auto';
     // Stop typing
     socket.emit('typing:stop', { conversationId: activeConversationId });
-    clearTimeout(typingTimeout.current);
+    if (typingTimeout.current) clearTimeout(typingTimeout.current);
   }, [input, activeConversationId, replyTo]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -94,7 +94,7 @@ export function ConversationView() {
     if (activeConversationId) {
       const socket = getSocket();
       socket.emit('typing:start', { conversationId: activeConversationId });
-      clearTimeout(typingTimeout.current);
+      if (typingTimeout.current) clearTimeout(typingTimeout.current);
       typingTimeout.current = setTimeout(() => {
         socket.emit('typing:stop', { conversationId: activeConversationId });
       }, 2000);

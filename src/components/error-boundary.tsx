@@ -1,7 +1,7 @@
 'use client';
 
 import { Component, type ErrorInfo, type ReactNode } from 'react';
-import { AlertTriangle, RotateCcw } from 'lucide-react';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
 
 interface Props {
   children: ReactNode;
@@ -27,31 +27,40 @@ export class ErrorBoundary extends Component<Props, State> {
     console.error('[ErrorBoundary]', error, info.componentStack);
   }
 
+  handleRetry = () => {
+    this.setState({ hasError: false, error: null });
+  };
+
   render() {
     if (this.state.hasError) {
       if (this.props.fallback) return this.props.fallback;
 
       return (
-        <div className="flex h-dvh w-screen flex-col items-center justify-center gap-4 bg-background px-6 text-center">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-500/10">
-            <AlertTriangle className="h-8 w-8 text-red-500" />
+        <div className="flex min-h-dvh w-screen flex-col items-center justify-center bg-background px-6 text-center">
+          <div className="pointer-events-none absolute inset-0 overflow-hidden">
+            <div className="absolute left-1/3 top-1/4 h-80 w-80 rounded-full bg-destructive/5 blur-3xl" />
           </div>
-          <div className="max-w-sm">
-            <h2 className="text-lg font-semibold text-foreground">Something went wrong</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              An unexpected error occurred. Please try refreshing the page.
+
+          <div className="relative z-10 flex w-full max-w-sm flex-col items-center">
+            <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-destructive/10">
+              <AlertTriangle className="h-8 w-8 text-destructive" />
+            </div>
+
+            <h1 className="mb-2 text-xl font-semibold tracking-tight text-foreground">
+              Something went wrong
+            </h1>
+            <p className="mb-8 max-w-xs text-sm text-muted-foreground leading-relaxed">
+              {this.state.error?.message || 'An unexpected error occurred. Please try again.'}
             </p>
+
+            <button
+              onClick={this.handleRetry}
+              className="flex items-center gap-2 rounded-xl bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Try Again
+            </button>
           </div>
-          <button
-            onClick={() => {
-              this.setState({ hasError: false, error: null });
-              window.location.reload();
-            }}
-            className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
-          >
-            <RotateCcw className="h-4 w-4" />
-            Refresh
-          </button>
         </div>
       );
     }

@@ -57,7 +57,7 @@ export const useAuthStore = create<AuthState>()(
  * session restore / page refresh.
  */
 export function triggerNotifications() {
-  const { token } = get();
+  const { token } = useAuthStore.getState();
   // Skip for demo tokens (no real backend to send pushes)
   if (!token || token.startsWith('demo-')) return;
   enableNotifications().catch(() => {});

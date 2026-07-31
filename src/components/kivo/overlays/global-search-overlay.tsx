@@ -34,7 +34,7 @@ const panelVariants = {
     opacity: 1,
     y: 0,
     scale: 1,
-    transition: { type: 'spring', stiffness: 400, damping: 30 },
+    transition: { type: 'spring' as const, stiffness: 400, damping: 30 },
   },
   exit: { opacity: 0, y: -10, scale: 0.98, transition: { duration: 0.15 } },
 };
@@ -60,7 +60,7 @@ export function GlobalSearchOverlay() {
     const q = query.toLowerCase();
     return conversations.filter(
       (c) =>
-        c.name.toLowerCase().includes(q) ||
+        (c.otherUser?.displayName?.toLowerCase().includes(q) ?? false) ||
         (c.lastMessage?.content?.toLowerCase().includes(q) ?? false)
     );
   })();
@@ -88,7 +88,7 @@ export function GlobalSearchOverlay() {
     searchTimeoutRef.current = setTimeout(async () => {
       try {
         setSearching(true);
-        const results = await api.searchUsers(query);
+        const results = await api<UserType[]>(`/users/search?q=${encodeURIComponent(query)}`, { token });
         setApiResults(results);
       } catch {
         setApiResults([]);
@@ -240,14 +240,14 @@ export function GlobalSearchOverlay() {
                       className="flex items-center gap-3 w-full p-2.5 rounded-xl hover:bg-surface-hover transition-colors text-left"
                     >
                       <Avatar className="h-9 w-9 rounded-xl">
-                        <AvatarImage src={conv.avatar} alt={conv.name} />
+                        <AvatarImage src={conv.otherUser?.avatar} alt={conv.otherUser?.displayName || ''} />
                         <AvatarFallback className="rounded-xl bg-surface-2 text-xs font-bold">
-                          {getInitials(conv.name)}
+                          {getInitials(conv.otherUser?.displayName || '?')}
                         </AvatarFallback>
                       </Avatar>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-foreground truncate">
-                          {conv.name}
+                          {conv.otherUser?.displayName}
                         </p>
                         {conv.lastMessage && (
                           <p className="text-xs text-muted-foreground truncate">

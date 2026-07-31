@@ -13,10 +13,11 @@ import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Switch } from '@/components/ui/switch';
 import { useTheme } from 'next-themes';
-import { ArrowLeft, Loader2, User, Palette, Bell, Shield, LogOut, UserX } from 'lucide-react';
+import { ArrowLeft, Loader2, User as UserIcon, Palette, Bell, Shield, LogOut, UserX } from 'lucide-react';
 import { toast } from 'sonner';
 import { disconnectSocket } from '@/lib/socket';
 import Image from 'next/image';
+import type { User } from '@/types';
 
 function getInitials(name: string) { return name.slice(0, 2).toUpperCase(); }
 
@@ -35,7 +36,7 @@ export function SettingsPanel() {
     if (!user) return;
     setLoading(true);
     try {
-      const updated = await api('/users/' + user.id, { token, method: 'PUT', body: form });
+      const updated = await api<User>('/users/' + user.id, { token, method: 'PUT', body: form });
       setUser(updated);
       setSection('main');
       toast.success('Profile updated');
@@ -263,7 +264,7 @@ export function SettingsPanel() {
             className="w-full flex items-center gap-3 rounded-xl bg-surface-1 p-4 text-left hover:bg-surface-hover transition-colors"
           >
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
-              <User className="h-5 w-5 text-primary" />
+              <UserIcon className="h-5 w-5 text-primary" />
             </div>
             <div className="flex-1">
               <p className="text-sm font-medium">Edit Profile</p>
