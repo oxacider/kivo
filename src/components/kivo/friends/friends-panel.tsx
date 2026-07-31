@@ -23,10 +23,10 @@ interface Props {
 
 export function FriendsPanel({ onClose }: Props) {
   const { token } = useAuthStore();
-  const { friends, pendingRequests, sentRequests, searchResults, isSearching, setFriends, setPendingRequests, addFriend, removeFriend, addSentRequest, removeSentRequest, setSearchResults, setIsSearching } = useFriendsStore();
+  const { friends, pendingRequests, sentRequests, searchResults, isSearching, setFriends, setPendingRequests, setSentRequests, addFriend, removeFriend, addSentRequest, removeSentRequest, setSearchResults, setIsSearching } = useFriendsStore();
   const { addConversation, setActiveConversationId } = useChatStore();
   const [search, setSearch] = useState('');
-  const [tab, setTab] = useState<'friends' | 'requests' | 'add' | 'blocked'>('friends');
+  const [tab, setTab] = useState<'friends' | 'requests' | 'sent' | 'add' | 'blocked'>('friends');
   const [blockedUsers, setBlockedUsers] = useState<User[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -97,6 +97,31 @@ export function FriendsPanel({ onClose }: Props) {
     } catch (err: any) { toast.error(err.message); }
   };
 
+  // Load friends data on mount
+  useEffect(() => {
+    if (!token) return;
+    (async () => {
+      try {
+        const [friendsList, requestsList, sentList]: any[] = await Promise.all([
+          api('/friends/list', { token }),
+          api('/friends/requests', { token }),
+          api('/friends/sent', { token }),
+        ]);
+        setFriends(friendsList);
+        setPendingRequests(requestsList);
+        setSentRequests(sentList);
+      } catch { /* ignore */ }
+    })();
+  }, [token, setFriends, setPendingRequests, setSentRequests]);
+
+  const cancelRequest = async (id: string) => {
+    try {
+      await api('/friends/cancel', { token, body: { requestId: id } });
+      removeSentRequest(id);
+      toast.success('Request cancelled');
+    } catch (err: any) { toast.error(err.message); }
+  };
+
   useEffect(() => {
     if (tab === 'blocked') {
       (async () => {
@@ -122,6 +147,7 @@ export function FriendsPanel({ onClose }: Props) {
   const tabs = [
     { key: 'friends' as const, label: 'Friends', count: friends.length },
     { key: 'requests' as const, label: 'Requests', count: pendingRequests.length },
+    { key: 'sent' as const, label: 'Sent', count: sentRequests.length },
     { key: 'add' as const, label: 'Add', count: 0 },
     { key: 'blocked' as const, label: 'Blocked', count: blockedUsers.length },
   ];
@@ -248,6 +274,32 @@ export function FriendsPanel({ onClose }: Props) {
             {search.length >= 2 && !isSearching && searchResults.length === 0 && (
               <p className="py-4 text-center text-xs text-muted-foreground">No users found</p>
             )}
+          </div>
+        )}
+
+        {tab === 'sent' && (
+          <div className="p-2">
+            {sentRequests.length === 0 && (
+              <p className="py-6 text-center text-xs text-muted-foreground">No sent requests</p>
+            )}
+            {sentRequests.map((req) => (
+              <div key={req.id} className="flex items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-surface-hover transition-colors">
+                <Avatar className="h-8 w-8">
+                  <AvatarImage src={(req as any).receiver?.avatar || undefined} />
+                  <AvatarFallback className="text-xs bg-primary/10 text-primary">{getInitials((req as any).receiver?.displayName || '?')}</AvatarFallback>
+                </Avatar>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium truncate">{(req as any).receiver?.displayName || 'User'}</p>
+                  <p className="text-[10px] text-muted-foreground">@{(req as any).receiver?.username || ''}</p>
+                </div>
+                <button
+                  onClick={() => cancelRequest(req.id)}
+                  className="text-[10px] font-medium text-amber-500 hover:bg-amber-500/10 px-2 py-1 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            ))}
           </div>
         )}
 

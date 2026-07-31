@@ -30,8 +30,13 @@ export function SignInForm() {
       });
       setUser(data.user);
       setToken(data.token);
-      setView('chat');
-      toast.success('Welcome back!');
+      if (!data.user.emailVerified) {
+        setView('verify-email');
+        toast.info('Please verify your email to continue');
+      } else {
+        setView('chat');
+        toast.success('Welcome back!');
+      }
       triggerNotifications();
     } catch (err: any) {
       toast.error(err.message || 'Sign in failed');
@@ -151,6 +156,7 @@ export function SignInForm() {
                 online: true,
                 lastSeen: new Date().toISOString(),
                 theme: 'dark',
+                emailVerified: true,
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
               });

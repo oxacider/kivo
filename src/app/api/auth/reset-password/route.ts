@@ -7,16 +7,30 @@ export async function POST(request: Request) {
     const { email, code, newPassword } = await request.json();
     if (!email || !code || !newPassword) return errorResponse('All fields are required');
     if (newPassword.length < 6) return errorResponse('Password must be at least 6 characters');
+    if (!/^\d{6}$/.test(code)) return errorResponse('Invalid reset code format');
 
-    // In production, verify code against a stored reset token.
-    // For this demo, accept any 6-digit code and reset the password directly.
-    if (!/^\d{6}$/.test(code)) return errorResponse('Invalid reset code');
-
-    const user = await db.user.findUnique({ where: { email } });
+    const user = await db.user.findUnique({
+      where: { email },
+      select: { id: true, resetCode: true, resetCodeExpires: true },
+    });
     if (!user) return errorResponse('Invalid email or code', 404);
 
+    if (!user.resetCode) return errorResponse('No reset code found. Please request a new one.');
+    if (user.resetCode !== code) return errorResponse('Invalid reset code', 400);
+
+    if (user.resetCodeExpires && new Date() > user.resetCodeExpires) {
+      return errorResponse('Reset code has expired. Please request a new one.');
+    }
+
     const hashedPassword = await hash(newPassword, 12);
-    await db.user.update({ where: { id: user.id }, data: { password: hashedPassword } });
+    await db.user.update({
+      where: { id: user.id },
+      data: {
+        password: hashedPassword,
+        resetCode: null,
+        resetCodeExpires: null,
+      },
+    });
 
     return Response.json({ success: true, message: 'Password reset successfully' });
   } catch {

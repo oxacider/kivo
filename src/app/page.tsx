@@ -11,6 +11,7 @@ import { WelcomeScreen } from '@/components/kivo/welcome-screen';
 import { SignInForm } from '@/components/kivo/auth/sign-in-form';
 import { SignUpForm } from '@/components/kivo/auth/sign-up-form';
 import { ForgotPasswordForm } from '@/components/kivo/auth/forgot-password-form';
+import { VerifyEmailForm } from '@/components/kivo/auth/verify-email-form';
 import { ConversationList } from '@/components/kivo/chat/conversation-list';
 import { ConversationView } from '@/components/kivo/chat/conversation-view';
 import { SettingsPanel } from '@/components/kivo/settings/settings-panel';
@@ -27,6 +28,7 @@ const viewConfig: Record<string, ViewConfig> = {
   signin: { key: 'signin', slideFrom: 80 },
   signup: { key: 'signup', slideFrom: 80 },
   'forgot-password': { key: 'forgot-password', slideFrom: 80 },
+  'verify-email': { key: 'verify-email', slideFrom: 80 },
   chat: { key: 'chat' },
   settings: { key: 'settings', slideFrom: 40 },
   profile: { key: 'profile', slideFrom: 40 },
@@ -69,7 +71,12 @@ export default function Home() {
       api('/auth/me', { token })
         .then((u: any) => {
           setUser(u);
-          setView('chat');
+          // Gate: unverified users go to verify-email
+          if (!u.emailVerified) {
+            setView('verify-email');
+          } else {
+            setView('chat');
+          }
         })
         .catch(() => {
           logout();
@@ -81,7 +88,12 @@ export default function Home() {
   const handleSplashDone = useCallback(() => {
     setSplashDone(true);
     if (user && token) {
-      setView('chat');
+      // Gate: unverified users go to verify-email
+      if (!token.startsWith('demo-') && !user.emailVerified) {
+        setView('verify-email');
+      } else {
+        setView('chat');
+      }
     } else {
       setView('welcome');
     }
@@ -109,6 +121,7 @@ export default function Home() {
             {currentView === 'signin' && <SignInForm />}
             {currentView === 'signup' && <SignUpForm />}
             {currentView === 'forgot-password' && <ForgotPasswordForm />}
+            {currentView === 'verify-email' && <VerifyEmailForm />}
             {currentView === 'settings' && <SettingsPanel />}
             {currentView === 'chat' && <ChatLayout />}
           </motion.div>

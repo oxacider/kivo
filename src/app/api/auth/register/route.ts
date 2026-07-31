@@ -2,6 +2,10 @@ import { db } from '@/lib/db';
 import { hash } from 'bcryptjs';
 import { generateToken, errorResponse } from '@/lib/auth';
 
+function generateCode(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
 export async function POST(request: Request) {
   try {
     const { email, password, displayName, username } = await request.json();
@@ -26,14 +30,25 @@ export async function POST(request: Request) {
     }
 
     const hashedPassword = await hash(password, 12);
+    const verificationCode = generateCode();
     const user = await db.user.create({
-      data: { email, password: hashedPassword, displayName, username },
+      data: { email, password: hashedPassword, displayName, username, verificationCode },
     });
 
     const token = await generateToken(user.id);
-    const { password: _, ...safeUser } = user;
+    const { password: _, verificationCode: __, ...safeUser } = user;
 
-    return Response.json({ success: true, data: { user: safeUser, token } }, { status: 201 });
+    // In development, return the verification code
+    const isDev = process.env.NODE_ENV !== 'production';
+
+    return Response.json({
+      success: true,
+      data: {
+        user: safeUser,
+        token,
+        verificationCode: isDev ? verificationCode : undefined,
+      },
+    }, { status: 201 });
   } catch (err) {
     console.error('Register error:', err);
     return errorResponse('Registration failed', 500);

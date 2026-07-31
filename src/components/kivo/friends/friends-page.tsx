@@ -3,11 +3,11 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Search, UserPlus, Check, X, UserMinus, MessageSquare, Shield, Users, Clock,
+  Search, UserPlus, Check, X, UserMinus, MessageSquare, Shield, Users, Clock, Send, UserX,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuthStore } from '@/stores/auth-store';
-import { useFriendsStore } from '@/stores/friends-store';
+import { useFriendsStore, type FriendRelationStatus } from '@/stores/friends-store';
 import { useChatStore } from '@/stores/chat-store';
 import { api } from '@/lib/api';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -17,12 +17,13 @@ function getInitials(name: string) {
   return name.slice(0, 2).toUpperCase();
 }
 
-type FriendTab = 'all' | 'online' | 'requests' | 'add';
+type FriendTab = 'all' | 'online' | 'requests' | 'sent' | 'add';
 
 const friendTabs: { id: FriendTab; label: string }[] = [
   { id: 'all', label: 'All Friends' },
   { id: 'online', label: 'Online' },
   { id: 'requests', label: 'Requests' },
+  { id: 'sent', label: 'Sent' },
   { id: 'add', label: 'Add Friend' },
 ];
 
@@ -34,7 +35,11 @@ const fadeUp = {
 
 export function FriendsPage() {
   const { user, token } = useAuthStore();
-  const { friends, pendingRequests, setFriends, setPendingRequests, removeFriend, removeRequest, updateRequestStatus } = useFriendsStore();
+  const {
+    friends, pendingRequests, sentRequests, friendStatuses, mutualCounts,
+    setFriends, setPendingRequests, setSentRequests, removeFriend, removeRequest,
+    removeSentRequest, addSentRequest, addFriend, setFriendStatus, setMutualCount,
+  } = useFriendsStore();
   const { setActiveConversationId, addConversation } = useChatStore();
 
   const [activeTab, setActiveTab] = useState<FriendTab>('all');
@@ -44,6 +49,23 @@ export function FriendsPage() {
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isDemo = token?.startsWith('demo-');
+
+  // Load data on mount
+  useEffect(() => {
+    if (!token || isDemo) return;
+    (async () => {
+      try {
+        const [friendsList, requestsList, sentList]: any[] = await Promise.all([
+          api('/friends/list', { token }),
+          api('/friends/requests', { token }),
+          api('/friends/sent', { token }),
+        ]);
+        setFriends(friendsList);
+        setPendingRequests(requestsList);
+        setSentRequests(sentList);
+      } catch { /* ignore */ }
+    })();
+  }, [token, isDemo, setFriends, setPendingRequests, setSentRequests]);
 
   const onlineFriends = useMemo(() => friends.filter((f) => f.online), [friends]);
 
@@ -67,19 +89,25 @@ export function FriendsPage() {
     return () => { if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current); };
   }, [activeTab, searchQuery, isDemo, token]);
 
+  const getFriendStatus = (userId: string): FriendRelationStatus => friendStatuses[userId] || 'none';
+
   const handleRemoveFriend = async (friendId: string) => {
     try {
       await api('/friends/remove', { token, method: 'POST', body: { userId: friendId } });
       removeFriend(friendId);
+      setFriendStatus(friendId, 'none');
       toast.success('Friend removed');
     } catch (err: any) { toast.error(err.message || 'Failed to remove friend'); }
   };
 
   const handleAcceptRequest = async (requestId: string) => {
     try {
-      const result = await api<{ conversation: any }>('/friends/accept', { token, method: 'POST', body: { requestId } });
-      updateRequestStatus(requestId, 'accepted');
-      if (result.conversation) addConversation(result.conversation);
+      const result: any = await api('/friends/accept', { token, method: 'POST', body: { requestId } });
+      removeRequest(requestId);
+      if (result?.conversation) addConversation(result.conversation);
+      // Refresh friends list
+      const updatedFriends = await api<UserType[]>('/friends/list', { token });
+      setFriends(updatedFriends);
       toast.success('Friend request accepted');
     } catch (err: any) { toast.error(err.message || 'Failed to accept'); }
   };
@@ -92,11 +120,30 @@ export function FriendsPage() {
     } catch (err: any) { toast.error(err.message || 'Failed to decline'); }
   };
 
+  const handleCancelRequest = async (requestId: string) => {
+    try {
+      await api('/friends/cancel', { token, method: 'POST', body: { requestId } });
+      removeSentRequest(requestId);
+      toast.success('Request cancelled');
+    } catch (err: any) { toast.error(err.message || 'Failed to cancel'); }
+  };
+
   const handleSendRequest = async (targetId: string) => {
     try {
-      await api('/friends/request', { token, method: 'POST', body: { userId: targetId } });
+      const result = await api<Friendship>('/friends/request', { token, method: 'POST', body: { receiverId: targetId } });
+      addSentRequest(result);
+      setFriendStatus(targetId, 'pending_sent');
       toast.success('Friend request sent');
     } catch (err: any) { toast.error(err.message || 'Failed to send request'); }
+  };
+
+  const handleBlockUser = async (targetId: string, name: string) => {
+    try {
+      await api('/blocks/block', { token, method: 'POST', body: { userId: targetId } });
+      removeFriend(targetId);
+      setFriendStatus(targetId, 'blocked');
+      toast.success(`${name} has been blocked`);
+    } catch (err: any) { toast.error(err.message || 'Failed to block user'); }
   };
 
   const handleStartChat = async (friendId: string) => {
@@ -105,6 +152,64 @@ export function FriendsPage() {
       setActiveConversationId(conv.id);
     } catch (err: any) { toast.error(err.message || 'Failed to start chat'); }
   };
+
+  const renderUserStatusButton = (targetUser: UserType) => {
+    const status = getFriendStatus(targetUser.id);
+    const mutual = mutualCounts[targetUser.id] || 0;
+
+    if (targetUser.id === user?.id) return null;
+
+    if (status === 'accepted') {
+      return (
+        <span className="text-[11px] text-muted-foreground px-2.5 py-1 bg-surface-2 rounded-lg">
+          Friends{mutual > 0 && <span className="ml-1 opacity-60">· {mutual} mutual</span>}
+        </span>
+      );
+    }
+    if (status === 'pending_sent') {
+      return <span className="text-[11px] text-amber-500 px-2.5 py-1 bg-amber-500/10 rounded-lg">Pending</span>;
+    }
+    if (status === 'blocked') {
+      return <span className="text-[11px] text-destructive px-2.5 py-1 bg-destructive/10 rounded-lg">Blocked</span>;
+    }
+    return (
+      <button
+        onClick={() => handleSendRequest(targetUser.id)}
+        className="flex items-center gap-1 text-[11px] font-medium text-primary hover:bg-primary/10 px-2.5 py-1 rounded-lg transition-colors"
+      >
+        <UserPlus size={12} /> Add
+        {mutual > 0 && <span className="opacity-60 ml-1">· {mutual} mutual</span>}
+      </button>
+    );
+  };
+
+  // Load friend statuses and mutual counts for search results
+  useEffect(() => {
+    if (activeTab !== 'add' || searchResults.length === 0 || !token || isDemo) return;
+    (async () => {
+      const statuses = await Promise.all(
+        searchResults.map(async (u) => {
+          try {
+            return await api<{ status: FriendRelationStatus; mutualCount: number }>(`/friends/status?userId=${u.id}`, { token });
+          } catch { return null; }
+        })
+      );
+      statuses.forEach((s, i) => {
+        if (s && searchResults[i]) {
+          setFriendStatus(searchResults[i].id, s.status);
+          setMutualCount(searchResults[i].id, s.mutualCount);
+        }
+      });
+    })();
+  }, [activeTab, searchResults, token, isDemo, setFriendStatus, setMutualCount]);
+
+  const tabsWithCounts = friendTabs.map((tab) => {
+    let count = 0;
+    if (tab.id === 'requests') count = pendingRequests.length;
+    if (tab.id === 'sent') count = sentRequests.length;
+    if (tab.id === 'all') count = friends.length;
+    return { ...tab, count };
+  });
 
   return (
     <div className="flex flex-col h-full">
@@ -123,14 +228,16 @@ export function FriendsPage() {
 
       {/* Tabs */}
       <div className="flex gap-2 px-5 pb-3 overflow-x-auto scrollbar-none">
-        {friendTabs.map((tab) => (
+        {tabsWithCounts.map((tab) => (
           <motion.button key={tab.id} whileTap={{ scale: 0.95 }} onClick={() => setActiveTab(tab.id)}
             className={`relative shrink-0 px-4 py-2 rounded-full text-sm font-medium transition-colors whitespace-nowrap ${
               activeTab === tab.id ? 'text-primary-foreground bg-primary' : 'text-muted-foreground bg-surface-2 hover:bg-surface-hover'
             }`}>
             {tab.label}
-            {tab.id === 'requests' && pendingRequests.length > 0 && (
-              <span className="ml-1.5 inline-flex items-center justify-center w-5 h-5 text-[10px] font-bold rounded-full bg-red-500 text-white">{pendingRequests.length}</span>
+            {tab.count > 0 && (
+              <span className={`ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] text-[10px] font-bold rounded-full px-1 ${
+                tab.id === 'requests' ? 'bg-red-500 text-white' : 'bg-white/10'
+              }`}>{tab.count}</span>
             )}
           </motion.button>
         ))}
@@ -158,6 +265,8 @@ export function FriendsPage() {
                   <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                     <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleStartChat(friend.id)}
                       className="p-2 rounded-xl bg-surface-2 hover:bg-primary hover:text-primary-foreground text-muted-foreground transition-colors"><MessageSquare size={16} /></motion.button>
+                    <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleBlockUser(friend.id, friend.displayName)}
+                      className="p-2 rounded-xl bg-surface-2 hover:bg-destructive hover:text-white text-muted-foreground transition-colors"><Shield size={16} /></motion.button>
                     <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleRemoveFriend(friend.id)}
                       className="p-2 rounded-xl bg-surface-2 hover:bg-red-500 hover:text-white text-muted-foreground transition-colors"><UserMinus size={16} /></motion.button>
                   </div>
@@ -222,6 +331,34 @@ export function FriendsPage() {
             </motion.div>
           )}
 
+          {activeTab === 'sent' && (
+            <motion.div key="sent" {...fadeUp} transition={{ duration: 0.2 }} className="flex flex-col gap-6">
+              <div>
+                <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Sent — {sentRequests.length}</h3>
+                {sentRequests.length === 0 ? (
+                  <p className="text-sm text-muted-foreground/60 py-4 text-center">No sent requests</p>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {sentRequests.map((req, i) => (
+                      <motion.div key={req.id} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}
+                        className="flex items-center gap-3 p-3 rounded-2xl hover:bg-surface-hover transition-colors">
+                        <Avatar className="h-11 w-11 rounded-2xl"><AvatarImage src={(req as any).receiver?.avatar} alt={(req as any).receiver?.displayName || ''} /><AvatarFallback className="rounded-2xl bg-surface-2 text-sm font-bold">{getInitials((req as any).receiver?.displayName || '?')}</AvatarFallback></Avatar>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-foreground truncate">{(req as any).receiver?.displayName || 'User'}</p>
+                          <p className="text-xs text-muted-foreground">@{(req as any).receiver?.username || ''}</p>
+                        </div>
+                        <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleCancelRequest(req.id)}
+                          className="flex items-center gap-1 text-xs font-medium text-amber-500 hover:bg-amber-500/10 px-2.5 py-1.5 rounded-lg transition-colors">
+                          <X size={14} /> Cancel
+                        </motion.button>
+                      </motion.div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
           {activeTab === 'add' && (
             <motion.div key="add" {...fadeUp} transition={{ duration: 0.2 }} className="flex flex-col gap-4">
               <div className="relative">
@@ -246,10 +383,7 @@ export function FriendsPage() {
                     <p className="text-sm font-semibold text-foreground truncate">{result.displayName}</p>
                     <p className="text-xs text-muted-foreground">@{result.username}</p>
                   </div>
-                  <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} onClick={() => handleSendRequest(result.id)}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 transition-opacity">
-                    <UserPlus size={14} /> Add
-                  </motion.button>
+                  {renderUserStatusButton(result)}
                 </motion.div>
               ))}
               {!searching && !searchQuery.trim() && (

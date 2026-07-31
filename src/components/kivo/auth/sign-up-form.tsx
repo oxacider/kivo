@@ -18,6 +18,7 @@ export function SignUpForm() {
   const { setUser, setToken } = useAuthStore();
   const [form, setForm] = useState({ email: '', password: '', displayName: '', username: '' });
   const [loading, setLoading] = useState(false);
+  const [devVerificationCode, setDevVerificationCode] = useState<string | null>(null);
 
   const update = (key: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [key]: e.target.value }));
@@ -27,11 +28,12 @@ export function SignUpForm() {
     if (!form.email || !form.password || !form.displayName || !form.username) return;
     setLoading(true);
     try {
-      const data = await api<{ user: User; token: string }>('/auth/register', { body: form });
+      const data: any = await api<{ user: User; token: string }>('/auth/register', { body: form });
       setUser(data.user);
       setToken(data.token);
-      setView('chat');
-      toast.success('Account created!');
+      if (data.verificationCode) setDevVerificationCode(data.verificationCode);
+      setView('verify-email');
+      toast.success('Account created! Please verify your email.');
       triggerNotifications();
     } catch (err: any) {
       toast.error(err.message || 'Sign up failed');
@@ -78,6 +80,11 @@ export function SignUpForm() {
 
         <h1 className="mb-1 text-2xl font-semibold tracking-tight">Create Account</h1>
         <p className="mb-8 text-sm text-muted-foreground">Join KIVO today</p>
+        {devVerificationCode && (
+          <div className="mb-6 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-600 dark:text-amber-400 text-center">
+            Dev mode — verification code: <span className="font-mono font-bold">{devVerificationCode}</span>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">

@@ -10,7 +10,15 @@ export async function POST(request: Request) {
       return errorResponse('Email and password are required');
     }
 
-    const user = await db.user.findUnique({ where: { email } });
+    const user = await db.user.findUnique({
+      where: { email },
+      select: {
+        id: true, email: true, password: true, displayName: true, username: true,
+        avatar: true, bio: true, status: true, online: true,
+        lastSeen: true, theme: true, emailVerified: true,
+        createdAt: true, updatedAt: true,
+      },
+    });
     if (!user) {
       return errorResponse('Invalid credentials', 401);
     }

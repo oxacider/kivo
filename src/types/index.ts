@@ -9,6 +9,7 @@ export interface User {
   online: boolean;
   lastSeen: string;
   theme: string;
+  emailVerified: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -57,6 +58,7 @@ export type ViewType =
   | 'signin'
   | 'signup'
   | 'forgot-password'
+  | 'verify-email'
   | 'chat'
   | 'settings'
   | 'profile'

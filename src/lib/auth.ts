@@ -51,7 +51,8 @@ export async function getAuthUser(request: Request): Promise<User | null> {
     select: {
       id: true, email: true, displayName: true, username: true,
       avatar: true, bio: true, status: true, online: true,
-      lastSeen: true, theme: true, createdAt: true, updatedAt: true,
+      lastSeen: true, theme: true, emailVerified: true,
+      createdAt: true, updatedAt: true,
     },
   });
   return user as User | null;

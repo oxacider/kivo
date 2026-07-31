@@ -1,11 +1,19 @@
 import { create } from 'zustand';
 import type { Friendship, User } from '@/types';
 
+export type FriendRelationStatus = 'none' | 'pending_sent' | 'pending_received' | 'accepted' | 'blocked' | 'blocked_by';
+
+interface FriendStatusMap {
+  [userId: string]: FriendRelationStatus;
+}
+
 interface FriendsState {
   friends: User[];
   pendingRequests: Friendship[];
   sentRequests: Friendship[];
   searchResults: User[];
+  friendStatuses: FriendStatusMap;
+  mutualCounts: { [userId: string]: number };
   isSearching: boolean;
   isLoading: boolean;
   setFriends: (friends: User[]) => void;
@@ -21,6 +29,8 @@ interface FriendsState {
   setSearchResults: (results: User[]) => void;
   setIsSearching: (searching: boolean) => void;
   setIsLoading: (loading: boolean) => void;
+  setFriendStatus: (userId: string, status: FriendRelationStatus) => void;
+  setMutualCount: (userId: string, count: number) => void;
   reset: () => void;
 }
 
@@ -29,6 +39,8 @@ const initialState = {
   pendingRequests: [] as Friendship[],
   sentRequests: [] as Friendship[],
   searchResults: [] as User[],
+  friendStatuses: {} as FriendStatusMap,
+  mutualCounts: {} as { [userId: string]: number },
   isSearching: false,
   isLoading: false,
 };
@@ -75,5 +87,13 @@ export const useFriendsStore = create<FriendsState>()((set) => ({
   setSearchResults: (searchResults) => set({ searchResults }),
   setIsSearching: (isSearching) => set({ isSearching }),
   setIsLoading: (isLoading) => set({ isLoading }),
+  setFriendStatus: (userId, status) =>
+    set((state) => ({
+      friendStatuses: { ...state.friendStatuses, [userId]: status },
+    })),
+  setMutualCount: (userId, count) =>
+    set((state) => ({
+      mutualCounts: { ...state.mutualCounts, [userId]: count },
+    })),
   reset: () => set(initialState),
 }));
