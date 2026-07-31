@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Message, Conversation, TypingUser, Reaction } from '@/types';
+import type { Message, Conversation, TypingUser, Reaction, MediaAttachment } from '@/types';
 
 export interface TypingUserData extends TypingUser {
   user?: { id: string; displayName: string; avatar: string } | null;
@@ -31,6 +31,7 @@ interface ChatState {
   clearUnread: (conversationId: string) => void;
   addReaction: (messageId: string, reaction: Reaction) => void;
   removeReaction: (messageId: string, userId: string, emoji: string) => void;
+  setMessageStatus: (messageId: string, status: Message['status']) => void;
   reset: () => void;
 }
 
@@ -130,6 +131,12 @@ export const useChatStore = create<ChatState>()((set) => ({
           ),
         };
       }),
+    })),
+  setMessageStatus: (messageId, status) =>
+    set((state) => ({
+      messages: state.messages.map((m) =>
+        m.id === messageId ? { ...m, status } : m
+      ),
     })),
   reset: () => set(initialState),
 }));

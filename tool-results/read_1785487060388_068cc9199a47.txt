@@ -1,0 +1,518 @@
+   350→    socket.emit('message:send', {
+   351→      conversationId: activeConversationId,
+   352→      content: msg.content,
+   353→      type: 'text',
+   354→      replyToId: msg.replyToId,
+   355→    });
+   356→  }, [activeConversationId, updateMessage]);
+   357→
+   358→  const handleKeyDown = (e: React.KeyboardEvent) => {
+   359→    if (e.key === 'Enter' && !e.shiftKey) {
+   360→      e.preventDefault();
+   361→      if (editingId) { saveEdit(); } else { sendMessage(); }
+   362→    }
+   363→  };
+   364→
+   365→  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+   366→    setInput(e.target.value);
+   367→    e.target.style.height = 'auto';
+   368→    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+   369→    if (activeConversationId) {
+   370→      const socket = getSocket();
+   371→      socket.emit('typing:start', { conversationId: activeConversationId });
+   372→      if (typingTimeout.current) clearTimeout(typingTimeout.current);
+   373→      typingTimeout.current = setTimeout(() => {
+   374→        socket.emit('typing:stop', { conversationId: activeConversationId });
+   375→      }, 2000);
+   376→    }
+   377→  };
+   378→
+   379→  const startEdit = (msg: Message) => {
+   380→    setEditingId(msg.id);
+   381→    setEditText(msg.content);
+   382→    setReplyTo(null);
+   383→    setQuickReactMsgId(null);
+   384→    inputRef.current?.focus();
+   385→  };
+   386→
+   387→  const saveEdit = async () => {
+   388→    if (!editingId || !editText.trim() || !activeConversationId) return;
+   389→    try {
+   390→      const updated = await api<Message>('/conversations/' + activeConversationId + '/messages', {
+   391→        token, method: 'PUT', body: { messageId: editingId, content: editText.trim() },
+   392→      });
+   393→      updateMessage(editingId, updated);
+   394→      setEditingId(null);
+   395→      setEditText('');
+   396→    } catch (err: any) { toast.error(err.message); }
+   397→  };
+   398→
+   399→  const deleteMessage = async (msgId: string) => {
+   400→    if (token?.startsWith('demo-')) { toast.info('Demo mode'); return; }
+   401→    try {
+   402→      await api('/messages/' + msgId, { token, method: 'DELETE' });
+   403→      updateMessage(msgId, { content: 'This message was deleted', deleted: true } as Partial<Message>);
+   404→    } catch (err: any) { toast.error(err.message); }
+   405→  };
+   406→
+   407→  const copyMessage = (content: string) => {
+   408→    navigator.clipboard.writeText(content).then(
+   409→      () => toast.success('Copied to clipboard'),
+   410→      () => toast.error('Failed to copy')
+   411→    );
+   412→  };
+   413→
+   414→  const blockUser = async () => {
+   415→    if (!otherUser) return;
+   416→    if (token?.startsWith('demo-')) { toast.info('Demo mode'); return; }
+   417→    try {
+   418→      await api('/blocks/block', { token, body: { userId: otherUser.id } });
+   419→      toast.success(`${otherUser.displayName} has been blocked`);
+   420→      setActiveConversationId(null);
+   421→    } catch (err: any) { toast.error(err.message); }
+   422→  };
+   423→
+   424→  const forwardMessage = (msg: Message) => {
+   425→    setForwardMsg(msg);
+   426→    setReplyTo(null);
+   427→    setQuickReactMsgId(null);
+   428→    inputRef.current?.focus();
+   429→  };
+   430→
+   431→  const sendForward = useCallback(() => {
+   432→    if (!forwardMsg?.content || !activeConversationId) return;
+   433→    const socket = getSocket();
+   434→    socket.emit('message:send', {
+   435→      conversationId: activeConversationId,
+   436→      content: forwardMsg.content,
+   437→      type: 'text',
+   438→      replyToId: null,
+   439→    });
+   440→    setForwardMsg(null);
+   441→  }, [forwardMsg, activeConversationId]);
+   442→
+   443→  const handleReact = useCallback((messageId: string, emoji: string) => {
+   444→    const socket = getSocket();
+   445→    socket.emit('reaction:add', { messageId, emoji });
+   446→    setQuickReactMsgId(null);
+   447→  }, []);
+   448→
+   449→  const filteredMessages = searchMsg
+   450→    ? messages.filter((m) => m.content.toLowerCase().includes(searchMsg.toLowerCase()))
+   451→    : messages;
+   452→
+   453→  if (!activeConversationId || !otherUser) {
+   454→    return (
+   455→      <div className="flex h-full flex-col items-center justify-center bg-background">
+   456→        <div className="text-center">
+   457→          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl overflow-hidden">
+   458→            <Image src="/logo.png" alt="KIVO" width={64} height={64} quality={100} sizes="64px" className="object-contain p-1.5 opacity-30" />
+   459→          </div>
+   460→          <h3 className="text-sm font-medium text-muted-foreground">Select a conversation</h3>
+   461→          <p className="mt-1 text-xs text-muted-foreground/60">Choose a chat to start messaging</p>
+   462→        </div>
+   463→      </div>
+   464→    );
+   465→  }
+   466→
+   467→  return (
+   468→    <div className="flex h-full flex-col bg-background">
+   469→      {/* ========== CHAT HEADER ========== */}
+   470→      <div className="flex items-center gap-3 border-b border-border/30 px-4 py-3 bg-surface-1">
+   471→        <button
+   472→          onClick={() => { setActiveConversationId(null); setQuickReactMsgId(null); }}
+   473→          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-all md:hidden"
+   474→        >
+   475→          <ArrowLeft className="h-4 w-4" />
+   476→        </button>
+   477→
+   478→        <ProfilePreview user={otherUser}>
+   479→          <button className="flex items-center gap-3 flex-1 min-w-0 text-left">
+   480→            <div className="relative">
+   481→              <Avatar className="h-9 w-9">
+   482→                <AvatarImage src={otherUser.avatar || undefined} />
+   483→                <AvatarFallback className="text-xs bg-primary/10 text-primary">{getInitials(otherUser.displayName || '?')}</AvatarFallback>
+   484→              </Avatar>
+   485→              {otherUser.showOnline !== false && otherUser.online && (
+   486→                <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-surface-1 bg-online" />
+   487→              )}
+   488→            </div>
+   489→            <div className="flex-1 min-w-0">
+   490→              <p className="text-sm font-medium truncate">{otherUser.displayName || otherUser.username}</p>
+   491→              <p className="text-[11px] text-muted-foreground">
+   492→                {isTyping && typingDisplay ? (
+   493→                  <motion.span
+   494→                    initial={{ opacity: 0 }}
+   495→                    animate={{ opacity: 1 }}
+   496→                    exit={{ opacity: 0 }}
+   497→                    className="text-typing font-medium"
+   498→                  >
+   499→                    {typingDisplay.user?.displayName || 'Someone'} is typing
+   500→                  </motion.span>
+   501→                ) : otherUser.showOnline !== false && otherUser.online ? (
+   502→                  <span className="text-online">Online</span>
+   503→                ) : otherUser.showLastSeen !== false ? (
+   504→                  <span className="flex items-center gap-1">
+   505→                    <Clock className="h-3 w-3" />
+   506→                    Last seen {formatLastSeen(otherUser.lastSeen)}
+   507→                  </span>
+   508→                ) : (
+   509→                  'Offline'
+   510→                )}
+   511→              </p>
+   512→            </div>
+   513→          </button>
+   514→        </ProfilePreview>
+   515→
+   516→        <DropdownMenu>
+   517→          <DropdownMenuTrigger asChild>
+   518→            <button className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-all">
+   519→              <MoreHorizontal className="h-4 w-4" />
+   520→            </button>
+   521→          </DropdownMenuTrigger>
+   522→          <DropdownMenuContent align="end" className="w-44">
+   523→            <DropdownMenuItem onClick={() => { setShowSearch(!showSearch); setQuickReactMsgId(null); }} className="text-xs cursor-pointer">
+   524→              <Search className="mr-2 h-3.5 w-3.5" /> Search Messages
+   525→            </DropdownMenuItem>
+   526→            <DropdownMenuSeparator />
+   527→            <DropdownMenuItem onClick={() => { blockUser(); setQuickReactMsgId(null); }} className="text-xs cursor-pointer text-destructive focus:text-destructive">
+   528→              <UserX className="mr-2 h-3.5 w-3.5" /> Block User
+   529→            </DropdownMenuItem>
+   530→          </DropdownMenuContent>
+   531→        </DropdownMenu>
+   532→      </div>
+   533→
+   534→      {/* ========== MESSAGE SEARCH BAR ========== */}
+   535→      <AnimatePresence>
+   536→        {showSearch && (
+   537→          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden border-b border-border/30 bg-surface-1">
+   538→            <div className="flex items-center gap-2 px-4 py-2">
+   539→              <Search className="h-3.5 w-3.5 text-muted-foreground/50" />
+   540→              <input autoFocus value={searchMsg} onChange={(e) => setSearchMsg(e.target.value)} placeholder="Search in conversation..." className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/40" />
+   541→              <button onClick={() => { setShowSearch(false); setSearchMsg(''); }} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+   542→            </div>
+   543→          </motion.div>
+   544→        )}
+   545→      </AnimatePresence>
+   546→
+   547→      {/* ========== MESSAGES AREA ========== */}
+   548→      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
+   549→        <div className="mx-auto max-w-2xl px-4 py-4">
+   550→          {/* Date divider */}
+   551→          {messages.length > 0 && (
+   552→            <div className="mb-4 flex items-center justify-center">
+   553→              <span className="rounded-full bg-surface-2 px-3 py-1 text-[10px] text-muted-foreground">
+   554→                {format(new Date(messages[0].createdAt), 'MMMM d, yyyy')}
+   555→              </span>
+   556→            </div>
+   557→          )}
+   558→
+   559→          {filteredMessages.map((msg, i) => {
+   560→            const isMine = msg.senderId === user?.id;
+   561→            const showAvatar = !isMine && (i === 0 || filteredMessages[i - 1]?.senderId !== msg.senderId);
+   562→            const isLast = i === filteredMessages.length - 1 || filteredMessages[i + 1]?.senderId !== msg.senderId;
+   563→            const isFailed = msg.status === 'failed';
+   564→            const isSending = msg.status === 'sending';
+   565→            const repliedMsg = msg.replyTo;
+   566→            const showQuickReact = quickReactMsgId === msg.id;
+   567→
+   568→            return (
+   569→              <motion.div
+   570→                key={msg.id}
+   571→                initial={isMine ? { opacity: 0, y: 12, scale: 0.95 } : { opacity: 0, x: -8, scale: 0.97 }}
+   572→                animate={{ opacity: 1, y: 0, x: 0, scale: 1 }}
+   573→                transition={{ duration: isMine ? 0.35 : 0.3, ease: [0.16, 1, 0.3, 1] }}
+   574→                className={`mb-1 flex ${isMine ? 'justify-end' : 'justify-start'} ${showAvatar ? 'mt-3' : 'mt-0.5'} ${isFailed ? 'animate-kivo-shake' : ''}`}
+   575→                onClick={() => setQuickReactMsgId(showQuickReact ? null : msg.id)}
+   576→              >
+   577→                {!isMine && (
+   578→                  <div className="w-8 shrink-0">
+   579→                    {showAvatar && (
+   580→                      <Avatar className="h-7 w-7">
+   581→                        <AvatarImage src={msg.sender?.avatar || undefined} />
+   582→                        <AvatarFallback className="text-[10px] bg-primary/10 text-primary">{getInitials(msg.sender?.displayName || '?')}</AvatarFallback>
+   583→                      </Avatar>
+   584→                    )}
+   585→                  </div>
+   586→                )}
+   587→                <div className={`max-w-[75%] ${isMine ? 'items-end' : 'items-start'}`}>
+   588→                  {/* Reply preview */}
+   589→                  {repliedMsg && (
+   590→                    <div className={`mb-0.5 ml-1 flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] ${
+   591→                      isMine ? 'bg-primary/10 text-primary-foreground/70' : 'bg-surface-2 text-muted-foreground'
+   592→                    }`}>
+   593→                      <CornerDownRight className="h-2.5 w-2.5 shrink-0" />
+   594→                      <span className="truncate max-w-[180px]">{repliedMsg.deleted ? 'Message deleted' : repliedMsg.content}</span>
+   595→                    </div>
+   596→                  )}
+   597→
+   598→                  <div className="group relative flex items-end gap-1.5">
+   599→                    <div className={`relative rounded-2xl px-3 py-1.5 ${
+   600→                      isFailed
+   601→                        ? 'bg-destructive/10 text-destructive border border-destructive/20 rounded-br-md'
+   602→                        : isMine
+   603→                          ? 'bg-primary text-primary-foreground rounded-br-md'
+   604→                          : 'bg-surface-2 text-foreground rounded-bl-md'
+   605→                    }`}>
+   606→                      {msg.deleted ? (
+   607→                        <p className="text-sm italic opacity-50">This message was deleted</p>
+   608→                      ) : (
+   609→                        <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{msg.content}</p>
+   610→                      )}
+   611→                      {msg.edited && !msg.deleted && (
+   612→                        <span className="text-[9px] opacity-50">edited</span>
+   613→                      )}
+   614→                    </div>
+   615→
+   616→                    {/* Message action buttons (hover) */}
+   617→                    {isLast && !msg.deleted && !isSending && (
+   618→                      <>
+   619→                        {isMine ? (
+   620→                          <div className="absolute -top-8 right-0 hidden group-hover:flex z-10">
+   621→                            <QuickReactionBar
+   622→                              onReact={(emoji) => handleReact(msg.id, emoji)}
+   623→                            />
+   624→                          </div>
+   625→                        ) : (
+   626→                          <div className="absolute -top-8 left-0 hidden group-hover:flex z-10">
+   627→                            <QuickReactionBar
+   628→                              onReact={(emoji) => handleReact(msg.id, emoji)}
+   629→                            />
+   630→                          </div>
+   631→                        )}
+   632→                      </>
+   633→                    )}
+   634→
+   635→                    {/* Mobile quick actions (tap) */}
+   636→                    {showQuickReact && !msg.deleted && !isSending && (
+   637→                      <div className={`absolute -top-8 ${isMine ? 'right-0' : 'left-0'} flex z-10 md:hidden`}>
+   638→                        <AnimatePresence>
+   639→                          <QuickReactionBar onReact={(emoji) => handleReact(msg.id, emoji)} />
+   640→                        </AnimatePresence>
+   641→                      </div>
+   642→                    )}
+   643→
+   644→                    {/* Desktop action row (hover) */}
+   645→                    {isMine && !msg.deleted && isLast && (
+   646→                      <div className="absolute -bottom-3 right-0 hidden group-hover:flex items-center gap-0.5">
+   647→                        <button onClick={(e) => { e.stopPropagation(); copyMessage(msg.content); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
+   648→                          <Copy className="h-3 w-3 text-muted-foreground" />
+   649→                        </button>
+   650→                        <button onClick={(e) => { e.stopPropagation(); setReplyTo(msg); inputRef.current?.focus(); setQuickReactMsgId(null); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
+   651→                          <CornerDownRight className="h-3 w-3 text-muted-foreground" />
+   652→                        </button>
+   653→                        <button onClick={(e) => { e.stopPropagation(); forwardMessage(msg); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
+   654→                          <Forward className="h-3 w-3 text-muted-foreground" />
+   655→                        </button>
+   656→                        <button onClick={(e) => { e.stopPropagation(); startEdit(msg); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
+   657→                          <Edit3 className="h-3 w-3 text-muted-foreground" />
+   658→                        </button>
+   659→                        <button onClick={(e) => { e.stopPropagation(); deleteMessage(msg.id); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-destructive/10 transition-colors">
+   660→                          <Trash2 className="h-3 w-3 text-muted-foreground" />
+   661→                        </button>
+   662→                      </div>
+   663→                    )}
+   664→                    {!isMine && !msg.deleted && isLast && (
+   665→                      <div className="absolute -bottom-3 left-0 hidden group-hover:flex items-center gap-0.5">
+   666→                        <button onClick={(e) => { e.stopPropagation(); copyMessage(msg.content); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
+   667→                          <Copy className="h-3 w-3 text-muted-foreground" />
+   668→                        </button>
+   669→                        <button onClick={(e) => { e.stopPropagation(); setReplyTo(msg); inputRef.current?.focus(); setQuickReactMsgId(null); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
+   670→                          <CornerDownRight className="h-3 w-3 text-muted-foreground" />
+   671→                        </button>
+   672→                        <button onClick={(e) => { e.stopPropagation(); forwardMessage(msg); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
+   673→                          <Forward className="h-3 w-3 text-muted-foreground" />
+   674→                        </button>
+   675→                      </div>
+   676→                    )}
+   677→                  </div>
+   678→
+   679→                  {/* Failed message retry */}
+   680→                  {isFailed && isLast && (
+   681→                    <div className="mt-1 flex justify-end">
+   682→                      <button
+   683→                        onClick={() => retryMessage(msg)}
+   684→                        className="flex items-center gap-1 rounded-lg bg-destructive/10 px-2 py-1 text-[10px] font-medium text-destructive hover:bg-destructive/20 transition-colors"
+   685→                      >
+   686→                        <RotateCcw className="h-3 w-3" /> Retry
+   687→                      </button>
+   688→                    </div>
+   689→                  )}
+   690→
+   691→                  {/* Reactions display */}
+   692→                  {msg.reactions && msg.reactions.length > 0 && (
+   693→                    <div className={isMine ? 'flex justify-end' : ''}>
+   694→                      <MessageReactions
+   695→                        reactions={msg.reactions}
+   696→                        myUserId={user?.id || ''}
+   697→                        onReact={(emoji) => handleReact(msg.id, emoji)}
+   698→                      />
+   699→                    </div>
+   700→                  )}
+   701→
+   702→                  {/* Status & time */}
+   703→                  {isLast && (
+   704→                    <div className={`mt-0.5 flex items-center gap-1 ${isMine ? 'justify-end' : 'justify-start'} px-1`}>
+   705→                      <span className="text-[10px] text-muted-foreground/50">
+   706→                        {format(new Date(msg.createdAt), 'h:mm a')}
+   707→                      </span>
+   708→                      {isMine && <MessageStatus status={msg.status} />}
+   709→                    </div>
+   710→                  )}
+   711→                </div>
+   712→              </motion.div>
+   713→            );
+   714→          })}
+   715→
+   716→          {/* ========== PREMIUM TYPING INDICATOR ========== */}
+   717→          <AnimatePresence>
+   718→            {isTyping && (
+   719→              <motion.div
+   720→                initial={{ opacity: 0, y: 8 }}
+   721→                animate={{ opacity: 1, y: 0 }}
+   722→                exit={{ opacity: 0, y: 8 }}
+   723→                transition={{ duration: 0.2 }}
+   724→                className="mt-2 flex items-center gap-2.5"
+   725→              >
+   726→                {typingDisplay?.user?.avatar && (
+   727→                  <Avatar className="h-6 w-6">
+   728→                    <AvatarImage src={typingDisplay.user.avatar || undefined} />
+   729→                    <AvatarFallback className="text-[8px] bg-primary/10 text-primary">{getInitials(typingDisplay.user.displayName || '?')}</AvatarFallback>
+   730→                  </Avatar>
+   731→                )}
+   732→                <div className="flex items-center gap-2">
+   733→                  <div className="flex items-center gap-1 rounded-2xl rounded-bl-md bg-surface-2 px-4 py-2.5">
+   734→                    {[0, 1, 2].map((i) => (
+   735→                      <span
+   736→                        key={i}
+   737→                        className="h-[6px] w-[6px] rounded-full bg-muted-foreground/50"
+   738→                        style={{
+   739→                          animation: 'kivo-typing-dot 1.4s ease-in-out infinite',
+   740→                          animationDelay: `${i * 0.2}s`,
+   741→                        }}
+   742→                      />
+   743→                    ))}
+   744→                  </div>
+   745→                  <span className="text-[11px] text-muted-foreground/60 font-medium">
+   746→                    {typingDisplay?.user?.displayName || 'Someone'} is typing
+   747→                  </span>
+   748→                </div>
+   749→              </motion.div>
+   750→            )}
+   751→          </AnimatePresence>
+   752→        </div>
+   753→      </div>
+   754→
+   755→      {/* ========== REPLY PREVIEW BAR ========== */}
+   756→      <AnimatePresence>
+   757→        {replyTo && (
+   758→          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden border-t border-border/30 bg-surface-1">
+   759→            <div className="flex items-center gap-2 px-4 py-2">
+   760→              <div className="w-1 h-8 rounded-full bg-primary" />
+   761→              <div className="flex-1 min-w-0">
+   762→                <p className="text-[10px] font-medium text-primary">Reply to {replyTo.senderId === user?.id ? 'yourself' : otherUser?.displayName}</p>
+   763→                <p className="text-[11px] text-muted-foreground truncate">{replyTo.deleted ? 'Message deleted' : replyTo.content}</p>
+   764→              </div>
+   765→              <button onClick={() => setReplyTo(null)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+   766→            </div>
+   767→          </motion.div>
+   768→        )}
+   769→      </AnimatePresence>
+   770→
+   771→      {/* ========== FORWARD PREVIEW BAR ========== */}
+   772→      <AnimatePresence>
+   773→        {forwardMsg && (
+   774→          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden border-t border-border/30 bg-surface-1">
+   775→            <div className="flex items-center gap-2 px-4 py-2">
+   776→              <Forward className="h-3.5 w-3.5 text-primary" />
+   777→              <div className="flex-1 min-w-0">
+   778→                <p className="text-[10px] font-medium text-primary">Forward message</p>
+   779→                <p className="text-[11px] text-muted-foreground truncate">{forwardMsg.content}</p>
+   780→              </div>
+   781→              <button onClick={() => setForwardMsg(null)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+   782→            </div>
+   783→          </motion.div>
+   784→        )}
+   785→      </AnimatePresence>
+   786→
+   787→      {/* ========== EDITING INDICATOR ========== */}
+   788→      <AnimatePresence>
+   789→        {editingId && (
+   790→          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden border-t border-border/30 bg-surface-1">
+   791→            <div className="flex items-center gap-2 px-4 py-2">
+   792→              <Edit3 className="h-3.5 w-3.5 text-primary" />
+   793→              <span className="text-xs text-primary font-medium">Editing message</span>
+   794→              <div className="flex-1" />
+   795→              <button onClick={() => { setEditingId(null); setEditText(''); }} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+   796→            </div>
+   797→          </motion.div>
+   798→        )}
+   799→      </AnimatePresence>
+   800→
+   801→      {/* ========== EMOJI PICKER ========== */}
+   802→      <AnimatePresence>
+   803→        {showEmoji && (
+   804→          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden border-t border-border/30 bg-surface-1">
+   805→            <div className="flex flex-wrap gap-1.5 px-4 py-3 max-h-36 overflow-y-auto">
+   806→              {EMOJI_LIST.map((emoji) => (
+   807→                <button
+   808→                  key={emoji}
+   809→                  onClick={() => { setInput((p) => p + emoji); inputRef.current?.focus(); }}
+   810→                  className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-surface-hover text-lg transition-colors"
+   811→                >
+   812→                  {emoji}
+   813→                </button>
+   814→              ))}
+   815→            </div>
+   816→          </motion.div>
+   817→        )}
+   818→      </AnimatePresence>
+   819→
+   820→      {/* ========== INPUT BAR ========== */}
+   821→      <div className="border-t border-border/30 bg-surface-1 px-4 py-3">
+   822→        <div className="mx-auto flex max-w-2xl items-end gap-2">
+   823→          {/* Media attach buttons (architecture prep) */}
+   824→          <div className="hidden sm:flex items-center gap-1">
+   825→            <button className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-colors" title="Attach image">
+   826→              <ImageIcon className="h-4.5 w-4.5" />
+   827→            </button>
+   828→            <button className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-colors" title="Attach file">
+   829→              <Paperclip className="h-4.5 w-4.5" />
+   830→            </button>
+   831→            <button className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-colors" title="Voice message">
+   832→              <Mic className="h-4.5 w-4.5" />
+   833→            </button>
+   834→          </div>
+   835→
+   836→          <button
+   837→            onClick={() => setShowEmoji(!showEmoji)}
+   838→            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors ${
+   839→              showEmoji ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-surface-hover'
+   840→            }`}
+   841→          >
+   842→            <Smile className="h-4.5 w-4.5" />
+   843→          </button>
+   844→          <div className="flex-1 relative">
+   845→            <textarea
+   846→              ref={inputRef}
+   847→              value={editingId ? editText : input}
+   848→              onChange={editingId ? (e) => setEditText(e.target.value) : handleInputChange}
+   849→              onKeyDown={handleKeyDown}
+   850→              placeholder="Type a message..."
+   851→              rows={1}
+   852→              className="w-full resize-none rounded-xl bg-surface-2 border border-border/30 px-4 py-2.5 text-sm leading-relaxed placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30 max-h-[120px]"
+   853→            />
+   854→          </div>
+   855→          <button
+   856→            onClick={editingId ? saveEdit : forwardMsg ? sendForward : sendMessage}
+   857→            disabled={editingId ? !editText.trim() : forwardMsg ? false : !input.trim()}
+   858→            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-all hover:opacity-90 disabled:opacity-40 kivo-glow"
+   859→          >
+   860→            {editingId ? <Check className="h-4 w-4" /> : forwardMsg ? <Forward className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+   861→          </button>
+   862→        </div>
+   863→      </div>
+   864→    </div>
+   865→  );
+   866→}
+   867→

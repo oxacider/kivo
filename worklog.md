@@ -332,3 +332,51 @@ Stage Summary:
 - Production build: ✓ Compiled successfully
 - Socket service: running on port 3003
 - Dev server: running on port 3000
+
+---
+Task ID: phase4-media-messaging
+Agent: main
+Task: Phase 4 — Complete Media Messaging System
+
+Work Log:
+- Added MediaAttachment model to Prisma schema (id, messageId, type, url, name, size, mimeType, width, height, createdAt)
+- Added attachments relation to Message model
+- Pushed schema to DB with `bun run db:push`
+- Updated TypeScript types:
+  - Added `attachments?: MediaAttachment[]` to Message interface
+  - Updated MediaAttachment interface (removed duration/thumbnailUrl, added messageId/createdAt)
+  - Added new `PendingImage` interface for local image preview state
+- Created `/api/media/upload` route (POST, FormData, validates image type/size, stores as base64 in DB)
+- Updated chat-store: added `setMessageStatus(messageId, status)` helper
+- Updated messages API route to include `attachments: true` in query
+- Updated socket service (kivo-chat-service/index.ts):
+  - message:send now accepts optional `attachmentId` field
+  - Creates message with attachment linked via Prisma `connect`
+  - Validates: for text messages requires content, for image messages allows empty content
+  - getMessageWithExtras now includes attachments
+- Upgraded conversation-view.tsx with full media messaging:
+  - ImageMessageBubble component: renders images with lazy loading spinner, landscape/portrait detection, scale animation
+  - Full-screen lightbox overlay (click to view, X to close, Framer Motion transitions)
+  - UploadProgressBar component: animated progress bar with Framer Motion
+  - Image selection handler: validates type (image/*), size (5MB max), reads dimensions via Image API
+  - Image preview bar above input: shows thumbnail, filename, size, dimensions, dismiss button
+  - Upload flow: XMLHttpRequest with progress tracking, optimistic message with local preview, real attachment on server response
+  - handleSend router: dispatches to sendImageMessage or sendMessage based on pendingImage state
+  - Updated onNew socket handler: matches optimistic image messages by type+sender+conversation
+  - Image button now visible on all screen sizes (mobile + desktop), functional click → file picker
+  - Send button shows spinner during upload, enabled when pendingImage exists
+  - Placeholder text changes to "Add a caption..." when image is selected
+  - Input bar restructured: hidden file input, functional image button, file/voice buttons (desktop prep)
+- Added 4 new CSS animations: kivo-media-shimmer, kivo-upload-progress, kivo-image-enter, kivo-preview-slide
+- Removed unused `import Image from 'next/image'` (switched all base64 images to `<img>`)
+
+Stage Summary:
+- Files modified: prisma/schema.prisma, src/types/index.ts, src/stores/chat-store.ts, src/app/api/conversations/[id]/messages/route.ts, mini-services/kivo-chat-service/index.ts, src/components/kivo/chat/conversation-view.tsx, src/app/globals.css
+- Files created: src/app/api/media/upload/route.ts
+- 7 files modified, 1 file created
+- TypeScript: 0 errors
+- ESLint: 0 errors, 0 warnings
+- Production build: ✓ Compiled successfully
+- Dev server: running on port 3000 (HTTP 200)
+- Socket service: running on port 3003
+- All existing systems (Firebase, Auth, Socket, Friends, Profile) untouched

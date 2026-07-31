@@ -1,0 +1,867 @@
+     1→     1→'use client';
+     2→     2→
+     3→     3→import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+     4→     4→import { motion, AnimatePresence } from 'framer-motion';
+     5→     5→import { useChatStore } from '@/stores/chat-store';
+     6→     6→import { useAuthStore } from '@/stores/auth-store';
+     7→     7→import { api } from '@/lib/api';
+     8→     8→import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+     9→     9→import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+    10→    10→import { format, formatDistanceToNow } from 'date-fns';
+    11→    11→import {
+    12→    12→  Send, Smile, MoreHorizontal, ArrowLeft, Check, CheckCheck,
+    13→    13→  Edit3, Trash2, X, CornerDownRight, UserX, Forward, Search,
+    14→    14→  Copy, RotateCcw, ImageIcon, Paperclip, Mic, Clock,
+    15→    15→  AlertCircle, Sparkles
+    16→    16→} from 'lucide-react';
+    17→    17→import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
+    18→    18→import { toast } from 'sonner';
+    19→    19→import { getSocket } from '@/lib/socket';
+    20→    20→import Image from 'next/image';
+    21→    21→import type { Message, Reaction } from '@/types';
+    22→    22→
+    23→    23→function getInitials(name: string) { return name.slice(0, 2).toUpperCase(); }
+    24→    24→
+    25→    25→const EMOJI_LIST = ['😊','😂','❤️','👍','🎉','🔥','💯','✨','🙌','😍','🤔','😅','👋','🥳','😎','🤝','💪','🫡','💕','🥰','😀','🥺','😢','😭'];
+    26→    26→
+    27→    27→const QUICK_REACTIONS = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
+    28→    28→
+    29→    29→function formatLastSeen(dateStr: string): string {
+    30→    30→  try {
+    31→    31→    return formatDistanceToNow(new Date(dateStr), { addSuffix: true });
+    32→    32→  } catch {
+    33→    33→    return 'recently';
+    34→    34→  }
+    35→    35→}
+    36→    36→
+    37→    37→// --- Message Status Icon ---
+    38→    38→function MessageStatus({ status, className = '' }: { status: Message['status']; className?: string }) {
+    39→    39→  if (status === 'failed') {
+    40→    40→    return <AlertCircle className={`h-3.5 w-3.5 text-destructive ${className}`} />;
+    41→    41→  }
+    42→    42→  if (status === 'sending') {
+    43→    43→    return <div className={`flex items-center gap-0.5 ${className}`}>
+    44→    44→      {[0, 1, 2].map(i => (
+    45→    45→        <span key={i} className="h-1 w-1 rounded-full bg-current opacity-40"
+    46→    46→          style={{ animation: 'kivo-status-pulse 1s ease-in-out infinite', animationDelay: `${i * 0.2}s` }} />
+    47→    47→      ))}
+    48→    48→    </div>;
+    49→    49→  }
+    50→    50→  if (status === 'read') {
+    51→    51→    return <CheckCheck className={`h-3.5 w-3.5 text-primary ${className}`} />;
+    52→    52→  }
+    53→    53→  if (status === 'delivered') {
+    54→    54→    return <CheckCheck className={`h-3.5 w-3.5 text-muted-foreground/50 ${className}`} />;
+    55→    55→  }
+    56→    56→  return <Check className={`h-3 w-3 text-muted-foreground/40 ${className}`} />;
+    57→    57→}
+    58→    58→
+    59→    59→// --- Reaction Badge on message ---
+    60→    60→function MessageReactions({
+    61→    61→  reactions,
+    62→    62→  myUserId,
+    63→    63→  onReact,
+    64→    64→  onLongPress,
+    65→    65→}: {
+    66→    66→  reactions: Reaction[];
+    67→    67→  myUserId: string;
+    68→    68→  onReact: (emoji: string) => void;
+    69→    69→  onLongPress?: () => void;
+    70→    70→}) {
+    71→    71→  if (!reactions || reactions.length === 0) return null;
+    72→    72→
+    73→    73→  const grouped = reactions.reduce<Record<string, Reaction[]>>((acc, r) => {
+    74→    74→    if (!acc[r.emoji]) acc[r.emoji] = [];
+    75→    75→    acc[r.emoji].push(r);
+    76→    76→    return acc;
+    77→    77→  }, {});
+    78→    78→
+    79→    79→  return (
+    80→    80→    <div className="flex flex-wrap gap-1 mt-0.5">
+    81→    81→      {Object.entries(grouped).map(([emoji, rs]) => {
+    82→    82→        const isMine = rs.some(r => r.userId === myUserId);
+    83→    83→        const count = rs.length;
+    84→    84→        const names = rs.map(r => r.user?.displayName).filter(Boolean).join(', ');
+    85→    85→        return (
+    86→    86→          <motion.button
+    87→    87→            key={emoji}
+    88→    88→            initial={{ scale: 0, opacity: 0 }}
+    89→    89→            animate={{ scale: 1, opacity: 1 }}
+    90→    90→            transition={{ type: 'spring', stiffness: 500, damping: 25 }}
+    91→    91→            whileTap={{ scale: 0.85 }}
+    92→    92→            onClick={(e) => { e.stopPropagation(); onReact(emoji); }}
+    93→    93→            title={names}
+    94→    94→            className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-xs transition-colors ${
+    95→    95→              isMine
+    96→    96→                ? 'bg-primary/15 ring-1 ring-primary/30'
+    97→    97→                : 'bg-surface-2 hover:bg-surface-hover'
+    98→    98→            }`}
+    99→    99→          >
+   100→   100→            <span className="text-sm leading-none">{emoji}</span>
+   101→   101→            {count > 1 && <span className="text-[10px] font-medium text-muted-foreground">{count}</span>}
+   102→   102→          </motion.button>
+   103→   103→        );
+   104→   104→      })}
+   105→   105→    </div>
+   106→   106→  );
+   107→   107→}
+   108→   108→
+   109→   109→// --- Quick Reaction Bar (shown on message hover/tap) ---
+   110→   110→function QuickReactionBar({ onReact, onOpenPicker }: { onReact: (emoji: string) => void; onOpenPicker?: () => void }) {
+   111→   111→  return (
+   112→   112→    <motion.div
+   113→   113→      initial={{ opacity: 0, y: 4, scale: 0.9 }}
+   114→   114→      animate={{ opacity: 1, y: 0, scale: 1 }}
+   115→   115→      exit={{ opacity: 0, y: 4, scale: 0.9 }}
+   116→   116→      transition={{ duration: 0.15 }}
+   117→   117→      className="flex items-center gap-0.5 rounded-full bg-popover px-1.5 py-1 shadow-lg border border-border/50"
+   118→   118→    >
+   119→   119→      {QUICK_REACTIONS.map((emoji) => (
+   120→   120→        <motion.button
+   121→   121→          key={emoji}
+   122→   122→          whileHover={{ scale: 1.3 }}
+   123→   123→          whileTap={{ scale: 0.8 }}
+   124→   124→          onClick={(e) => { e.stopPropagation(); onReact(emoji); }}
+   125→   125→          className="flex h-7 w-7 items-center justify-center rounded-full hover:bg-surface-hover transition-colors text-base"
+   126→   126→        >
+   127→   127→          {emoji}
+   128→   128→        </motion.button>
+   129→   129→      ))}
+   130→   130→      {onOpenPicker && (
+   131→   131→        <div className="w-px h-4 bg-border/50 mx-0.5" />
+   132→   132→      )}
+   133→   133→    </motion.div>
+   134→   134→  );
+   135→   135→}
+   136→   136→
+   137→   137→// --- Profile Preview Popover ---
+   138→   138→function ProfilePreview({ user, children }: { user: { displayName: string; username: string; avatar: string; bio: string; status: string; online: boolean; lastSeen: string; showOnline: boolean; showLastSeen: boolean }; children: React.ReactNode }) {
+   139→   139→  return (
+   140→   140→    <Popover>
+   141→   141→      <PopoverTrigger asChild>{children}</PopoverTrigger>
+   142→   142→      <PopoverContent className="w-72 p-0" side="bottom" align="start">
+   143→   143→        <div className="flex flex-col items-center gap-3 p-5">
+   144→   144→          <Avatar className="h-16 w-16">
+   145→   145→            <AvatarImage src={user.avatar || undefined} />
+   146→   146→            <AvatarFallback className="text-lg font-semibold bg-primary/10 text-primary">
+   147→   147→              {getInitials(user.displayName || '?')}
+   148→   148→            </AvatarFallback>
+   149→   149→          </Avatar>
+   150→   150→          <div className="text-center">
+   151→   151→            <h3 className="font-semibold text-sm">{user.displayName || user.username}</h3>
+   152→   152→            <p className="text-xs text-muted-foreground">@{user.username}</p>
+   153→   153→          </div>
+   154→   154→          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+   155→   155→            {user.showOnline !== false && user.online ? (
+   156→   156→              <><span className="h-2 w-2 rounded-full bg-online" /> Online</>
+   157→   157→            ) : user.showLastSeen !== false ? (
+   158→   158→              <><Clock className="h-3 w-3" /> Last seen {formatLastSeen(user.lastSeen)}</>
+   159→   159→            ) : null}
+   160→   160→          </div>
+   161→   161→          {user.bio && (
+   162→   162→            <p className="text-xs text-muted-foreground text-center leading-relaxed px-2">{user.bio}</p>
+   163→   163→          )}
+   164→   164→          {user.status && user.status !== 'Hey there! I\'m using KIVO' && (
+   165→   165→            <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-surface-2 rounded-lg px-3 py-1.5">
+   166→   166→              <Sparkles className="h-3 w-3" />
+   167→   167→              <span className="truncate">{user.status}</span>
+   168→   168→            </div>
+   169→   169→          )}
+   170→   170→        </div>
+   171→   171→      </PopoverContent>
+   172→   172→    </Popover>
+   173→   173→  );
+   174→   174→}
+   175→   175→
+   176→   176→// ===================== MAIN COMPONENT =====================
+   177→   177→export function ConversationView() {
+   178→   178→  const { activeConversationId, conversations, messages, setMessages, addMessage, updateMessage, removeMessage, typingUsers, setActiveConversationId, updateConversation, addReaction, removeReaction } = useChatStore();
+   179→   179→  const { user, token } = useAuthStore();
+   180→   180→  const [input, setInput] = useState('');
+   181→   181→  const [showEmoji, setShowEmoji] = useState(false);
+   182→   182→  const [replyTo, setReplyTo] = useState<Message | null>(null);
+   183→   183→  const [editingId, setEditingId] = useState<string | null>(null);
+   184→   184→  const [editText, setEditText] = useState('');
+   185→   185→  const [forwardMsg, setForwardMsg] = useState<Message | null>(null);
+   186→   186→  const [showSearch, setShowSearch] = useState(false);
+   187→   187→  const [searchMsg, setSearchMsg] = useState('');
+   188→   188→  const [quickReactMsgId, setQuickReactMsgId] = useState<string | null>(null);
+   189→   189→  const scrollRef = useRef<HTMLDivElement>(null);
+   190→   190→  const inputRef = useRef<HTMLTextAreaElement>(null);
+   191→   191→  const typingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+   192→   192→  const [wasAtBottom, setWasAtBottom] = useState(true);
+   193→   193→
+   194→   194→  const activeConv = conversations.find((c) => c.id === activeConversationId);
+   195→   195→  const otherUser = activeConv?.otherUser;
+   196→   196→  const activeTypingUsers = useMemo(
+   197→   197→    () => typingUsers.filter(t => t.conversationId === activeConversationId && t.isTyping && t.userId !== user?.id),
+   198→   198→    [typingUsers, activeConversationId, user?.id]
+   199→   199→  );
+   200→   200→  const isTyping = activeTypingUsers.length > 0;
+   201→   201→  const typingDisplay = activeTypingUsers.length === 1
+   202→   202→    ? activeTypingUsers[0]
+   203→   203→    : null;
+   204→   204→
+   205→   205→  // Track scroll position
+   206→   206→  const handleScroll = useCallback(() => {
+   207→   207→    const el = scrollRef.current;
+   208→   208→    if (!el) return;
+   209→   209→    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+   210→   210→    setWasAtBottom(atBottom);
+   211→   211→  }, []);
+   212→   212→
+   213→   213→  // Socket listeners for delivered, read, reactions, and optimistic message replacement
+   214→   214→  useEffect(() => {
+   215→   215→    if (!token || token.startsWith('demo-')) return;
+   216→   216→    const socket = getSocket();
+   217→   217→
+   218→   218→    const onDelivered = (data: { messageId: string; conversationId: string; status: string }) => {
+   219→   219→      if (data.conversationId !== activeConversationId) return;
+   220→   220→      updateMessage(data.messageId, { status: 'delivered' });
+   221→   221→    };
+   222→   222→
+   223→   223→    const onRead = (data: { conversationId: string; userId: string }) => {
+   224→   224→      if (data.conversationId !== activeConversationId) return;
+   225→   225→      // Batch: mark all sent/delivered/sending messages as read in one update
+   226→   226→      const msgs = useChatStore.getState().messages;
+   227→   227→      const updates = msgs
+   228→   228→        .filter(m => m.senderId === user?.id && (m.status === 'sent' || m.status === 'delivered' || m.status === 'sending'))
+   229→   229→        .map(m => ({ id: m.id, status: 'read' as const }));
+   230→   230→      if (updates.length > 0) {
+   231→   231→        useChatStore.setState((state) => ({
+   232→   232→          messages: state.messages.map((m) => {
+   233→   233→            const u = updates.find((up) => up.id === m.id);
+   234→   234→            return u ? { ...m, status: u.status } : m;
+   235→   235→          }),
+   236→   236→        }));
+   237→   237→      }
+   238→   238→    };
+   239→   239→
+   240→   240→    const onNew = (msg: any) => {
+   241→   241→      // Replace optimistic sending message with the real server message
+   242→   242→      const msgs = useChatStore.getState().messages;
+   243→   243→      const sending = msgs.find(m => m.status === 'sending' && m.conversationId === msg.conversationId && m.content === msg.content && m.senderId === msg.senderId);
+   244→   244→      if (sending && sending.id.startsWith('temp-')) {
+   245→   245→        // Remove the temp message, the real one will be added by the store's addMessage
+   246→   246→        useChatStore.getState().removeMessage(sending.id);
+   247→   247→      }
+   248→   248→    };
+   249→   249→
+   250→   250→    const onReaction = (data: any) => {
+   251→   251→      if (data.removed) {
+   252→   252→        removeReaction(data.messageId, data.userId, data.emoji);
+   253→   253→      } else {
+   254→   254→        addReaction(data.messageId, data);
+   255→   255→      }
+   256→   256→    };
+   257→   257→
+   258→   258→    socket.on('message:delivered', onDelivered);
+   259→   259→    socket.on('message:read', onRead);
+   260→   260→    socket.on('message:new', onNew);
+   261→   261→    socket.on('reaction:update', onReaction);
+   262→   262→
+   263→   263→    return () => {
+   264→   264→      socket.off('message:delivered', onDelivered);
+   265→   265→      socket.off('message:read', onRead);
+   266→   266→      socket.off('message:new', onNew);
+   267→   267→      socket.off('reaction:update', onReaction);
+   268→   268→    };
+   269→   269→  }, [token, activeConversationId, user?.id, updateMessage, removeMessage, addReaction, removeReaction]);
+   270→   270→
+   271→   271→  // Load messages when conversation changes
+   272→   272→  useEffect(() => {
+   273→   273→    if (!activeConversationId || !token) return;
+   274→   274→    const isDemo = token.startsWith('demo-');
+   275→   275→    if (isDemo) return;
+   276→   276→    let cancelled = false;
+   277→   277→    (async () => {
+   278→   278→      try {
+   279→   279→        const msgs = await api<Message[]>('/conversations/' + activeConversationId + '/messages', { token });
+   280→   280→        if (!cancelled) setMessages(msgs);
+   281→   281→      } catch (err: any) { if (!cancelled) toast.error(err.message); }
+   282→   282→    })();
+   283→   283→    return () => { cancelled = true; };
+   284→   284→  }, [activeConversationId, token]);
+   285→   285→
+   286→   286→  // Clean up typing timeout on unmount
+   287→   287→  useEffect(() => {
+   288→   288→    return () => {
+   289→   289→      if (typingTimeout.current) clearTimeout(typingTimeout.current);
+   290→   290→    };
+   291→   291→  }, []);
+   292→   292→
+   293→   293→  // Scroll to bottom on new messages (only if already at bottom)
+   294→   294→  useEffect(() => {
+   295→   295→    if (wasAtBottom) {
+   296→   296→      setTimeout(() => {
+   297→   297→        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+   298→   298→      }, 50);
+   299→   299→    }
+   300→   300→  }, [messages, isTyping, wasAtBottom]);
+   301→   301→
+   302→   302→  const sendMessage = useCallback(() => {
+   303→   303→    if (!input.trim() || !activeConversationId) return;
+   304→   304→    const socket = getSocket();
+   305→   305→    const content = input.trim();
+   306→   306→    const replyId = replyTo?.id || null;
+   307→   307→
+   308→   308→    // Optimistic local message
+   309→   309→    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+   310→   310→    const optimisticMsg: Message = {
+   311→   311→      id: tempId,
+   312→   312→      conversationId: activeConversationId,
+   313→   313→      senderId: user?.id || '',
+   314→   314→      content,
+   315→   315→      type: 'text',
+   316→   316→      status: 'sending',
+   317→   317→      replyToId: replyId,
+   318→   318→      edited: false,
+   319→   319→      deleted: false,
+   320→   320→      createdAt: new Date().toISOString(),
+   321→   321→      updatedAt: new Date().toISOString(),
+   322→   322→      sender: user ? { id: user.id, email: user.email, displayName: user.displayName, username: user.username, avatar: user.avatar, bio: user.bio, status: user.status, online: user.online, lastSeen: user.lastSeen, theme: user.theme, emailVerified: user.emailVerified, showOnline: user.showOnline, showLastSeen: user.showLastSeen, showReadReceipts: user.showReadReceipts, createdAt: user.createdAt, updatedAt: user.updatedAt } : undefined,
+   323→   323→      replyTo: replyTo ? { id: replyTo.id, conversationId: replyTo.conversationId, senderId: replyTo.senderId, content: replyTo.content, type: replyTo.type, status: replyTo.status, replyToId: replyTo.replyToId, edited: replyTo.edited, deleted: replyTo.deleted, createdAt: replyTo.createdAt, updatedAt: replyTo.updatedAt } : null,
+   324→   324→    };
+   325→   325→    addMessage(optimisticMsg);
+   326→   326→
+   327→   327→    setInput('');
+   328→   328→    setReplyTo(null);
+   329→   329→    setShowEmoji(false);
+   330→   330→    if (inputRef.current) inputRef.current.style.height = 'auto';
+   331→   331→
+   332→   332→    // Stop typing
+   333→   333→    socket.emit('typing:stop', { conversationId: activeConversationId });
+   334→   334→    if (typingTimeout.current) clearTimeout(typingTimeout.current);
+   335→   335→
+   336→   336→    // Emit to server
+   337→   337→    socket.emit('message:send', {
+   338→   338→      conversationId: activeConversationId,
+   339→   339→      content,
+   340→   340→      type: 'text',
+   341→   341→      replyToId: replyId,
+   342→   342→    });
+   343→   343→  }, [input, activeConversationId, replyTo, user, addMessage]);
+   344→   344→
+   345→   345→  const retryMessage = useCallback((msg: Message) => {
+   346→   346→    if (!activeConversationId || msg.status !== 'failed') return;
+   347→   347→    const socket = getSocket();
+   348→   348→    // Update locally to 'sending'
+   349→   349→    updateMessage(msg.id, { status: 'sending' });
+   350→   350→    socket.emit('message:send', {
+   351→   351→      conversationId: activeConversationId,
+   352→   352→      content: msg.content,
+   353→   353→      type: 'text',
+   354→   354→      replyToId: msg.replyToId,
+   355→   355→    });
+   356→   356→  }, [activeConversationId, updateMessage]);
+   357→   357→
+   358→   358→  const handleKeyDown = (e: React.KeyboardEvent) => {
+   359→   359→    if (e.key === 'Enter' && !e.shiftKey) {
+   360→   360→      e.preventDefault();
+   361→   361→      if (editingId) { saveEdit(); } else { sendMessage(); }
+   362→   362→    }
+   363→   363→  };
+   364→   364→
+   365→   365→  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+   366→   366→    setInput(e.target.value);
+   367→   367→    e.target.style.height = 'auto';
+   368→   368→    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+   369→   369→    if (activeConversationId) {
+   370→   370→      const socket = getSocket();
+   371→   371→      socket.emit('typing:start', { conversationId: activeConversationId });
+   372→   372→      if (typingTimeout.current) clearTimeout(typingTimeout.current);
+   373→   373→      typingTimeout.current = setTimeout(() => {
+   374→   374→        socket.emit('typing:stop', { conversationId: activeConversationId });
+   375→   375→      }, 2000);
+   376→   376→    }
+   377→   377→  };
+   378→   378→
+   379→   379→  const startEdit = (msg: Message) => {
+   380→   380→    setEditingId(msg.id);
+   381→   381→    setEditText(msg.content);
+   382→   382→    setReplyTo(null);
+   383→   383→    setQuickReactMsgId(null);
+   384→   384→    inputRef.current?.focus();
+   385→   385→  };
+   386→   386→
+   387→   387→  const saveEdit = async () => {
+   388→   388→    if (!editingId || !editText.trim() || !activeConversationId) return;
+   389→   389→    try {
+   390→   390→      const updated = await api<Message>('/conversations/' + activeConversationId + '/messages', {
+   391→   391→        token, method: 'PUT', body: { messageId: editingId, content: editText.trim() },
+   392→   392→      });
+   393→   393→      updateMessage(editingId, updated);
+   394→   394→      setEditingId(null);
+   395→   395→      setEditText('');
+   396→   396→    } catch (err: any) { toast.error(err.message); }
+   397→   397→  };
+   398→   398→
+   399→   399→  const deleteMessage = async (msgId: string) => {
+   400→   400→    if (token?.startsWith('demo-')) { toast.info('Demo mode'); return; }
+   401→   401→    try {
+   402→   402→      await api('/messages/' + msgId, { token, method: 'DELETE' });
+   403→   403→      updateMessage(msgId, { content: 'This message was deleted', deleted: true } as Partial<Message>);
+   404→   404→    } catch (err: any) { toast.error(err.message); }
+   405→   405→  };
+   406→   406→
+   407→   407→  const copyMessage = (content: string) => {
+   408→   408→    navigator.clipboard.writeText(content).then(
+   409→   409→      () => toast.success('Copied to clipboard'),
+   410→   410→      () => toast.error('Failed to copy')
+   411→   411→    );
+   412→   412→  };
+   413→   413→
+   414→   414→  const blockUser = async () => {
+   415→   415→    if (!otherUser) return;
+   416→   416→    if (token?.startsWith('demo-')) { toast.info('Demo mode'); return; }
+   417→   417→    try {
+   418→   418→      await api('/blocks/block', { token, body: { userId: otherUser.id } });
+   419→   419→      toast.success(`${otherUser.displayName} has been blocked`);
+   420→   420→      setActiveConversationId(null);
+   421→   421→    } catch (err: any) { toast.error(err.message); }
+   422→   422→  };
+   423→   423→
+   424→   424→  const forwardMessage = (msg: Message) => {
+   425→   425→    setForwardMsg(msg);
+   426→   426→    setReplyTo(null);
+   427→   427→    setQuickReactMsgId(null);
+   428→   428→    inputRef.current?.focus();
+   429→   429→  };
+   430→   430→
+   431→   431→  const sendForward = useCallback(() => {
+   432→   432→    if (!forwardMsg?.content || !activeConversationId) return;
+   433→   433→    const socket = getSocket();
+   434→   434→    socket.emit('message:send', {
+   435→   435→      conversationId: activeConversationId,
+   436→   436→      content: forwardMsg.content,
+   437→   437→      type: 'text',
+   438→   438→      replyToId: null,
+   439→   439→    });
+   440→   440→    setForwardMsg(null);
+   441→   441→  }, [forwardMsg, activeConversationId]);
+   442→   442→
+   443→   443→  const handleReact = useCallback((messageId: string, emoji: string) => {
+   444→   444→    const socket = getSocket();
+   445→   445→    socket.emit('reaction:add', { messageId, emoji });
+   446→   446→    setQuickReactMsgId(null);
+   447→   447→  }, []);
+   448→   448→
+   449→   449→  const filteredMessages = searchMsg
+   450→   450→    ? messages.filter((m) => m.content.toLowerCase().includes(searchMsg.toLowerCase()))
+   451→   451→    : messages;
+   452→   452→
+   453→   453→  if (!activeConversationId || !otherUser) {
+   454→   454→    return (
+   455→   455→      <div className="flex h-full flex-col items-center justify-center bg-background">
+   456→   456→        <div className="text-center">
+   457→   457→          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl overflow-hidden">
+   458→   458→            <Image src="/logo.png" alt="KIVO" width={64} height={64} quality={100} sizes="64px" className="object-contain p-1.5 opacity-30" />
+   459→   459→          </div>
+   460→   460→          <h3 className="text-sm font-medium text-muted-foreground">Select a conversation</h3>
+   461→   461→          <p className="mt-1 text-xs text-muted-foreground/60">Choose a chat to start messaging</p>
+   462→   462→        </div>
+   463→   463→      </div>
+   464→   464→    );
+   465→   465→  }
+   466→   466→
+   467→   467→  return (
+   468→   468→    <div className="flex h-full flex-col bg-background">
+   469→   469→      {/* ========== CHAT HEADER ========== */}
+   470→   470→      <div className="flex items-center gap-3 border-b border-border/30 px-4 py-3 bg-surface-1">
+   471→   471→        <button
+   472→   472→          onClick={() => { setActiveConversationId(null); setQuickReactMsgId(null); }}
+   473→   473→          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-all md:hidden"
+   474→   474→        >
+   475→   475→          <ArrowLeft className="h-4 w-4" />
+   476→   476→        </button>
+   477→   477→
+   478→   478→        <ProfilePreview user={otherUser}>
+   479→   479→          <button className="flex items-center gap-3 flex-1 min-w-0 text-left">
+   480→   480→            <div className="relative">
+   481→   481→              <Avatar className="h-9 w-9">
+   482→   482→                <AvatarImage src={otherUser.avatar || undefined} />
+   483→   483→                <AvatarFallback className="text-xs bg-primary/10 text-primary">{getInitials(otherUser.displayName || '?')}</AvatarFallback>
+   484→   484→              </Avatar>
+   485→   485→              {otherUser.showOnline !== false && otherUser.online && (
+   486→   486→                <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-surface-1 bg-online" />
+   487→   487→              )}
+   488→   488→            </div>
+   489→   489→            <div className="flex-1 min-w-0">
+   490→   490→              <p className="text-sm font-medium truncate">{otherUser.displayName || otherUser.username}</p>
+   491→   491→              <p className="text-[11px] text-muted-foreground">
+   492→   492→                {isTyping && typingDisplay ? (
+   493→   493→                  <motion.span
+   494→   494→                    initial={{ opacity: 0 }}
+   495→   495→                    animate={{ opacity: 1 }}
+   496→   496→                    exit={{ opacity: 0 }}
+   497→   497→                    className="text-typing font-medium"
+   498→   498→                  >
+   499→   499→                    {typingDisplay.user?.displayName || 'Someone'} is typing
+   500→   500→                  </motion.span>
+   501→   501→                ) : otherUser.showOnline !== false && otherUser.online ? (
+   502→   502→                  <span className="text-online">Online</span>
+   503→   503→                ) : otherUser.showLastSeen !== false ? (
+   504→   504→                  <span className="flex items-center gap-1">
+   505→   505→                    <Clock className="h-3 w-3" />
+   506→   506→                    Last seen {formatLastSeen(otherUser.lastSeen)}
+   507→   507→                  </span>
+   508→   508→                ) : (
+   509→   509→                  'Offline'
+   510→   510→                )}
+   511→   511→              </p>
+   512→   512→            </div>
+   513→   513→          </button>
+   514→   514→        </ProfilePreview>
+   515→   515→
+   516→   516→        <DropdownMenu>
+   517→   517→          <DropdownMenuTrigger asChild>
+   518→   518→            <button className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-all">
+   519→   519→              <MoreHorizontal className="h-4 w-4" />
+   520→   520→            </button>
+   521→   521→          </DropdownMenuTrigger>
+   522→   522→          <DropdownMenuContent align="end" className="w-44">
+   523→   523→            <DropdownMenuItem onClick={() => { setShowSearch(!showSearch); setQuickReactMsgId(null); }} className="text-xs cursor-pointer">
+   524→   524→              <Search className="mr-2 h-3.5 w-3.5" /> Search Messages
+   525→   525→            </DropdownMenuItem>
+   526→   526→            <DropdownMenuSeparator />
+   527→   527→            <DropdownMenuItem onClick={() => { blockUser(); setQuickReactMsgId(null); }} className="text-xs cursor-pointer text-destructive focus:text-destructive">
+   528→   528→              <UserX className="mr-2 h-3.5 w-3.5" /> Block User
+   529→   529→            </DropdownMenuItem>
+   530→   530→          </DropdownMenuContent>
+   531→   531→        </DropdownMenu>
+   532→   532→      </div>
+   533→   533→
+   534→   534→      {/* ========== MESSAGE SEARCH BAR ========== */}
+   535→   535→      <AnimatePresence>
+   536→   536→        {showSearch && (
+   537→   537→          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden border-b border-border/30 bg-surface-1">
+   538→   538→            <div className="flex items-center gap-2 px-4 py-2">
+   539→   539→              <Search className="h-3.5 w-3.5 text-muted-foreground/50" />
+   540→   540→              <input autoFocus value={searchMsg} onChange={(e) => setSearchMsg(e.target.value)} placeholder="Search in conversation..." className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/40" />
+   541→   541→              <button onClick={() => { setShowSearch(false); setSearchMsg(''); }} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+   542→   542→            </div>
+   543→   543→          </motion.div>
+   544→   544→        )}
+   545→   545→      </AnimatePresence>
+   546→   546→
+   547→   547→      {/* ========== MESSAGES AREA ========== */}
+   548→   548→      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
+   549→   549→        <div className="mx-auto max-w-2xl px-4 py-4">
+   550→   550→          {/* Date divider */}
+   551→   551→          {messages.length > 0 && (
+   552→   552→            <div className="mb-4 flex items-center justify-center">
+   553→   553→              <span className="rounded-full bg-surface-2 px-3 py-1 text-[10px] text-muted-foreground">
+   554→   554→                {format(new Date(messages[0].createdAt), 'MMMM d, yyyy')}
+   555→   555→              </span>
+   556→   556→            </div>
+   557→   557→          )}
+   558→   558→
+   559→   559→          {filteredMessages.map((msg, i) => {
+   560→   560→            const isMine = msg.senderId === user?.id;
+   561→   561→            const showAvatar = !isMine && (i === 0 || filteredMessages[i - 1]?.senderId !== msg.senderId);
+   562→   562→            const isLast = i === filteredMessages.length - 1 || filteredMessages[i + 1]?.senderId !== msg.senderId;
+   563→   563→            const isFailed = msg.status === 'failed';
+   564→   564→            const isSending = msg.status === 'sending';
+   565→   565→            const repliedMsg = msg.replyTo;
+   566→   566→            const showQuickReact = quickReactMsgId === msg.id;
+   567→   567→
+   568→   568→            return (
+   569→   569→              <motion.div
+   570→   570→                key={msg.id}
+   571→   571→                initial={isMine ? { opacity: 0, y: 12, scale: 0.95 } : { opacity: 0, x: -8, scale: 0.97 }}
+   572→   572→                animate={{ opacity: 1, y: 0, x: 0, scale: 1 }}
+   573→   573→                transition={{ duration: isMine ? 0.35 : 0.3, ease: [0.16, 1, 0.3, 1] }}
+   574→   574→                className={`mb-1 flex ${isMine ? 'justify-end' : 'justify-start'} ${showAvatar ? 'mt-3' : 'mt-0.5'} ${isFailed ? 'animate-kivo-shake' : ''}`}
+   575→   575→                onClick={() => setQuickReactMsgId(showQuickReact ? null : msg.id)}
+   576→   576→              >
+   577→   577→                {!isMine && (
+   578→   578→                  <div className="w-8 shrink-0">
+   579→   579→                    {showAvatar && (
+   580→   580→                      <Avatar className="h-7 w-7">
+   581→   581→                        <AvatarImage src={msg.sender?.avatar || undefined} />
+   582→   582→                        <AvatarFallback className="text-[10px] bg-primary/10 text-primary">{getInitials(msg.sender?.displayName || '?')}</AvatarFallback>
+   583→   583→                      </Avatar>
+   584→   584→                    )}
+   585→   585→                  </div>
+   586→   586→                )}
+   587→   587→                <div className={`max-w-[75%] ${isMine ? 'items-end' : 'items-start'}`}>
+   588→   588→                  {/* Reply preview */}
+   589→   589→                  {repliedMsg && (
+   590→   590→                    <div className={`mb-0.5 ml-1 flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] ${
+   591→   591→                      isMine ? 'bg-primary/10 text-primary-foreground/70' : 'bg-surface-2 text-muted-foreground'
+   592→   592→                    }`}>
+   593→   593→                      <CornerDownRight className="h-2.5 w-2.5 shrink-0" />
+   594→   594→                      <span className="truncate max-w-[180px]">{repliedMsg.deleted ? 'Message deleted' : repliedMsg.content}</span>
+   595→   595→                    </div>
+   596→   596→                  )}
+   597→   597→
+   598→   598→                  <div className="group relative flex items-end gap-1.5">
+   599→   599→                    <div className={`relative rounded-2xl px-3 py-1.5 ${
+   600→   600→                      isFailed
+   601→   601→                        ? 'bg-destructive/10 text-destructive border border-destructive/20 rounded-br-md'
+   602→   602→                        : isMine
+   603→   603→                          ? 'bg-primary text-primary-foreground rounded-br-md'
+   604→   604→                          : 'bg-surface-2 text-foreground rounded-bl-md'
+   605→   605→                    }`}>
+   606→   606→                      {msg.deleted ? (
+   607→   607→                        <p className="text-sm italic opacity-50">This message was deleted</p>
+   608→   608→                      ) : (
+   609→   609→                        <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{msg.content}</p>
+   610→   610→                      )}
+   611→   611→                      {msg.edited && !msg.deleted && (
+   612→   612→                        <span className="text-[9px] opacity-50">edited</span>
+   613→   613→                      )}
+   614→   614→                    </div>
+   615→   615→
+   616→   616→                    {/* Message action buttons (hover) */}
+   617→   617→                    {isLast && !msg.deleted && !isSending && (
+   618→   618→                      <>
+   619→   619→                        {isMine ? (
+   620→   620→                          <div className="absolute -top-8 right-0 hidden group-hover:flex z-10">
+   621→   621→                            <QuickReactionBar
+   622→   622→                              onReact={(emoji) => handleReact(msg.id, emoji)}
+   623→   623→                            />
+   624→   624→                          </div>
+   625→   625→                        ) : (
+   626→   626→                          <div className="absolute -top-8 left-0 hidden group-hover:flex z-10">
+   627→   627→                            <QuickReactionBar
+   628→   628→                              onReact={(emoji) => handleReact(msg.id, emoji)}
+   629→   629→                            />
+   630→   630→                          </div>
+   631→   631→                        )}
+   632→   632→                      </>
+   633→   633→                    )}
+   634→   634→
+   635→   635→                    {/* Mobile quick actions (tap) */}
+   636→   636→                    {showQuickReact && !msg.deleted && !isSending && (
+   637→   637→                      <div className={`absolute -top-8 ${isMine ? 'right-0' : 'left-0'} flex z-10 md:hidden`}>
+   638→   638→                        <AnimatePresence>
+   639→   639→                          <QuickReactionBar onReact={(emoji) => handleReact(msg.id, emoji)} />
+   640→   640→                        </AnimatePresence>
+   641→   641→                      </div>
+   642→   642→                    )}
+   643→   643→
+   644→   644→                    {/* Desktop action row (hover) */}
+   645→   645→                    {isMine && !msg.deleted && isLast && (
+   646→   646→                      <div className="absolute -bottom-3 right-0 hidden group-hover:flex items-center gap-0.5">
+   647→   647→                        <button onClick={(e) => { e.stopPropagation(); copyMessage(msg.content); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
+   648→   648→                          <Copy className="h-3 w-3 text-muted-foreground" />
+   649→   649→                        </button>
+   650→   650→                        <button onClick={(e) => { e.stopPropagation(); setReplyTo(msg); inputRef.current?.focus(); setQuickReactMsgId(null); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
+   651→   651→                          <CornerDownRight className="h-3 w-3 text-muted-foreground" />
+   652→   652→                        </button>
+   653→   653→                        <button onClick={(e) => { e.stopPropagation(); forwardMessage(msg); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
+   654→   654→                          <Forward className="h-3 w-3 text-muted-foreground" />
+   655→   655→                        </button>
+   656→   656→                        <button onClick={(e) => { e.stopPropagation(); startEdit(msg); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
+   657→   657→                          <Edit3 className="h-3 w-3 text-muted-foreground" />
+   658→   658→                        </button>
+   659→   659→                        <button onClick={(e) => { e.stopPropagation(); deleteMessage(msg.id); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-destructive/10 transition-colors">
+   660→   660→                          <Trash2 className="h-3 w-3 text-muted-foreground" />
+   661→   661→                        </button>
+   662→   662→                      </div>
+   663→   663→                    )}
+   664→   664→                    {!isMine && !msg.deleted && isLast && (
+   665→   665→                      <div className="absolute -bottom-3 left-0 hidden group-hover:flex items-center gap-0.5">
+   666→   666→                        <button onClick={(e) => { e.stopPropagation(); copyMessage(msg.content); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
+   667→   667→                          <Copy className="h-3 w-3 text-muted-foreground" />
+   668→   668→                        </button>
+   669→   669→                        <button onClick={(e) => { e.stopPropagation(); setReplyTo(msg); inputRef.current?.focus(); setQuickReactMsgId(null); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
+   670→   670→                          <CornerDownRight className="h-3 w-3 text-muted-foreground" />
+   671→   671→                        </button>
+   672→   672→                        <button onClick={(e) => { e.stopPropagation(); forwardMessage(msg); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
+   673→   673→                          <Forward className="h-3 w-3 text-muted-foreground" />
+   674→   674→                        </button>
+   675→   675→                      </div>
+   676→   676→                    )}
+   677→   677→                  </div>
+   678→   678→
+   679→   679→                  {/* Failed message retry */}
+   680→   680→                  {isFailed && isLast && (
+   681→   681→                    <div className="mt-1 flex justify-end">
+   682→   682→                      <button
+   683→   683→                        onClick={() => retryMessage(msg)}
+   684→   684→                        className="flex items-center gap-1 rounded-lg bg-destructive/10 px-2 py-1 text-[10px] font-medium text-destructive hover:bg-destructive/20 transition-colors"
+   685→   685→                      >
+   686→   686→                        <RotateCcw className="h-3 w-3" /> Retry
+   687→   687→                      </button>
+   688→   688→                    </div>
+   689→   689→                  )}
+   690→   690→
+   691→   691→                  {/* Reactions display */}
+   692→   692→                  {msg.reactions && msg.reactions.length > 0 && (
+   693→   693→                    <div className={isMine ? 'flex justify-end' : ''}>
+   694→   694→                      <MessageReactions
+   695→   695→                        reactions={msg.reactions}
+   696→   696→                        myUserId={user?.id || ''}
+   697→   697→                        onReact={(emoji) => handleReact(msg.id, emoji)}
+   698→   698→                      />
+   699→   699→                    </div>
+   700→   700→                  )}
+   701→   701→
+   702→   702→                  {/* Status & time */}
+   703→   703→                  {isLast && (
+   704→   704→                    <div className={`mt-0.5 flex items-center gap-1 ${isMine ? 'justify-end' : 'justify-start'} px-1`}>
+   705→   705→                      <span className="text-[10px] text-muted-foreground/50">
+   706→   706→                        {format(new Date(msg.createdAt), 'h:mm a')}
+   707→   707→                      </span>
+   708→   708→                      {isMine && <MessageStatus status={msg.status} />}
+   709→   709→                    </div>
+   710→   710→                  )}
+   711→   711→                </div>
+   712→   712→              </motion.div>
+   713→   713→            );
+   714→   714→          })}
+   715→   715→
+   716→   716→          {/* ========== PREMIUM TYPING INDICATOR ========== */}
+   717→   717→          <AnimatePresence>
+   718→   718→            {isTyping && (
+   719→   719→              <motion.div
+   720→   720→                initial={{ opacity: 0, y: 8 }}
+   721→   721→                animate={{ opacity: 1, y: 0 }}
+   722→   722→                exit={{ opacity: 0, y: 8 }}
+   723→   723→                transition={{ duration: 0.2 }}
+   724→   724→                className="mt-2 flex items-center gap-2.5"
+   725→   725→              >
+   726→   726→                {typingDisplay?.user?.avatar && (
+   727→   727→                  <Avatar className="h-6 w-6">
+   728→   728→                    <AvatarImage src={typingDisplay.user.avatar || undefined} />
+   729→   729→                    <AvatarFallback className="text-[8px] bg-primary/10 text-primary">{getInitials(typingDisplay.user.displayName || '?')}</AvatarFallback>
+   730→   730→                  </Avatar>
+   731→   731→                )}
+   732→   732→                <div className="flex items-center gap-2">
+   733→   733→                  <div className="flex items-center gap-1 rounded-2xl rounded-bl-md bg-surface-2 px-4 py-2.5">
+   734→   734→                    {[0, 1, 2].map((i) => (
+   735→   735→                      <span
+   736→   736→                        key={i}
+   737→   737→                        className="h-[6px] w-[6px] rounded-full bg-muted-foreground/50"
+   738→   738→                        style={{
+   739→   739→                          animation: 'kivo-typing-dot 1.4s ease-in-out infinite',
+   740→   740→                          animationDelay: `${i * 0.2}s`,
+   741→   741→                        }}
+   742→   742→                      />
+   743→   743→                    ))}
+   744→   744→                  </div>
+   745→   745→                  <span className="text-[11px] text-muted-foreground/60 font-medium">
+   746→   746→                    {typingDisplay?.user?.displayName || 'Someone'} is typing
+   747→   747→                  </span>
+   748→   748→                </div>
+   749→   749→              </motion.div>
+   750→   750→            )}
+   751→   751→          </AnimatePresence>
+   752→   752→        </div>
+   753→   753→      </div>
+   754→   754→
+   755→   755→      {/* ========== REPLY PREVIEW BAR ========== */}
+   756→   756→      <AnimatePresence>
+   757→   757→        {replyTo && (
+   758→   758→          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden border-t border-border/30 bg-surface-1">
+   759→   759→            <div className="flex items-center gap-2 px-4 py-2">
+   760→   760→              <div className="w-1 h-8 rounded-full bg-primary" />
+   761→   761→              <div className="flex-1 min-w-0">
+   762→   762→                <p className="text-[10px] font-medium text-primary">Reply to {replyTo.senderId === user?.id ? 'yourself' : otherUser?.displayName}</p>
+   763→   763→                <p className="text-[11px] text-muted-foreground truncate">{replyTo.deleted ? 'Message deleted' : replyTo.content}</p>
+   764→   764→              </div>
+   765→   765→              <button onClick={() => setReplyTo(null)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+   766→   766→            </div>
+   767→   767→          </motion.div>
+   768→   768→        )}
+   769→   769→      </AnimatePresence>
+   770→   770→
+   771→   771→      {/* ========== FORWARD PREVIEW BAR ========== */}
+   772→   772→      <AnimatePresence>
+   773→   773→        {forwardMsg && (
+   774→   774→          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden border-t border-border/30 bg-surface-1">
+   775→   775→            <div className="flex items-center gap-2 px-4 py-2">
+   776→   776→              <Forward className="h-3.5 w-3.5 text-primary" />
+   777→   777→              <div className="flex-1 min-w-0">
+   778→   778→                <p className="text-[10px] font-medium text-primary">Forward message</p>
+   779→   779→                <p className="text-[11px] text-muted-foreground truncate">{forwardMsg.content}</p>
+   780→   780→              </div>
+   781→   781→              <button onClick={() => setForwardMsg(null)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+   782→   782→            </div>
+   783→   783→          </motion.div>
+   784→   784→        )}
+   785→   785→      </AnimatePresence>
+   786→   786→
+   787→   787→      {/* ========== EDITING INDICATOR ========== */}
+   788→   788→      <AnimatePresence>
+   789→   789→        {editingId && (
+   790→   790→          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden border-t border-border/30 bg-surface-1">
+   791→   791→            <div className="flex items-center gap-2 px-4 py-2">
+   792→   792→              <Edit3 className="h-3.5 w-3.5 text-primary" />
+   793→   793→              <span className="text-xs text-primary font-medium">Editing message</span>
+   794→   794→              <div className="flex-1" />
+   795→   795→              <button onClick={() => { setEditingId(null); setEditText(''); }} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
+   796→   796→            </div>
+   797→   797→          </motion.div>
+   798→   798→        )}
+   799→   799→      </AnimatePresence>
+   800→   800→
+   801→   801→      {/* ========== EMOJI PICKER ========== */}
+   802→   802→      <AnimatePresence>
+   803→   803→        {showEmoji && (
+   804→   804→          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden border-t border-border/30 bg-surface-1">
+   805→   805→            <div className="flex flex-wrap gap-1.5 px-4 py-3 max-h-36 overflow-y-auto">
+   806→   806→              {EMOJI_LIST.map((emoji) => (
+   807→   807→                <button
+   808→   808→                  key={emoji}
+   809→   809→                  onClick={() => { setInput((p) => p + emoji); inputRef.current?.focus(); }}
+   810→   810→                  className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-surface-hover text-lg transition-colors"
+   811→   811→                >
+   812→   812→                  {emoji}
+   813→   813→                </button>
+   814→   814→              ))}
+   815→   815→            </div>
+   816→   816→          </motion.div>
+   817→   817→        )}
+   818→   818→      </AnimatePresence>
+   819→   819→
+   820→   820→      {/* ========== INPUT BAR ========== */}
+   821→   821→      <div className="border-t border-border/30 bg-surface-1 px-4 py-3">
+   822→   822→        <div className="mx-auto flex max-w-2xl items-end gap-2">
+   823→   823→          {/* Media attach buttons (architecture prep) */}
+   824→   824→          <div className="hidden sm:flex items-center gap-1">
+   825→   825→            <button className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-colors" title="Attach image">
+   826→   826→              <ImageIcon className="h-4.5 w-4.5" />
+   827→   827→            </button>
+   828→   828→            <button className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-colors" title="Attach file">
+   829→   829→              <Paperclip className="h-4.5 w-4.5" />
+   830→   830→            </button>
+   831→   831→            <button className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-colors" title="Voice message">
+   832→   832→              <Mic className="h-4.5 w-4.5" />
+   833→   833→            </button>
+   834→   834→          </div>
+   835→   835→
+   836→   836→          <button
+   837→   837→            onClick={() => setShowEmoji(!showEmoji)}
+   838→   838→            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors ${
+   839→   839→              showEmoji ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-surface-hover'
+   840→   840→            }`}
+   841→   841→          >
+   842→   842→            <Smile className="h-4.5 w-4.5" />
+   843→   843→          </button>
+   844→   844→          <div className="flex-1 relative">
+   845→   845→            <textarea
+   846→   846→              ref={inputRef}
+   847→   847→              value={editingId ? editText : input}
+   848→   848→              onChange={editingId ? (e) => setEditText(e.target.value) : handleInputChange}
+   849→   849→              onKeyDown={handleKeyDown}
+   850→   850→              placeholder="Type a message..."
+   851→   851→              rows={1}
+   852→   852→              className="w-full resize-none rounded-xl bg-surface-2 border border-border/30 px-4 py-2.5 text-sm leading-relaxed placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30 max-h-[120px]"
+   853→   853→            />
+   854→   854→          </div>
+   855→   855→          <button
+   856→   856→            onClick={editingId ? saveEdit : forwardMsg ? sendForward : sendMessage}
+   857→   857→            disabled={editingId ? !editText.trim() : forwardMsg ? false : !input.trim()}
+   858→   858→            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-all hover:opacity-90 disabled:opacity-40 kivo-glow"
+   859→   859→          >
+   860→   860→            {editingId ? <Check className="h-4 w-4" /> : forwardMsg ? <Forward className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+   861→   861→          </button>
+   862→   862→        </div>
+   863→   863→      </div>
+   864→   864→    </div>
+   865→   865→  );
+   866→   866→}
+   867→   867→

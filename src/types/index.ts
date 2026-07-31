@@ -41,6 +41,7 @@ export interface Message {
   sender?: User;
   replyTo?: Message | null;
   reactions?: Reaction[];
+  attachments?: MediaAttachment[];
 }
 
 export interface Conversation {
@@ -91,13 +92,23 @@ export interface OnlineUser {
 
 export interface MediaAttachment {
   id: string;
+  messageId?: string;
   type: 'image' | 'video' | 'file' | 'voice';
   url: string;
   name: string;
   size: number;
   mimeType: string;
-  duration?: number;
   width?: number;
   height?: number;
-  thumbnailUrl?: string;
+  createdAt?: string;
+}
+
+export interface PendingImage {
+  file: File;
+  dataUrl: string;
+  width: number;
+  height: number;
+  mimeType: string;
+  name: string;
+  size: number;
 }

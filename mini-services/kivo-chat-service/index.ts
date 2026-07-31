@@ -101,6 +101,7 @@ function getMessageWithExtras(messageId: string) {
           user: { select: { id: true, displayName: true, avatar: true } },
         },
       },
+      attachments: true,
     },
   })
 }
@@ -160,11 +161,13 @@ io.on('connection', async (socket) => {
       content,
       type,
       replyToId,
+      attachmentId,
     }: {
       conversationId: string
       content: string
       type?: string
       replyToId?: string
+      attachmentId?: string
     }) => {
       try {
         // Validate conversation membership
@@ -175,17 +178,33 @@ io.on('connection', async (socket) => {
         const otherId = getOtherUserId(conv, userId)
         if (await isBlocked(userId, otherId)) return
 
-        // Validate content
-        if (!content || typeof content !== 'string' || content.length > 10000) return
+        // For text messages, validate content
+        const msgType = type ?? 'text'
+        if (msgType === 'text' && (!content || typeof content !== 'string' || content.length > 10000)) return
+
+        // Link attachment to the message if provided
+        if (attachmentId) {
+          try {
+            await db.mediaAttachment.update({
+              where: { id: attachmentId },
+              data: { messageId: undefined }, // detach first (no-op if not linked)
+            })
+          } catch {
+            // attachment may not exist, continue
+          }
+        }
 
         const message = await db.message.create({
           data: {
             conversationId,
             senderId: userId,
-            content,
-            type: type ?? 'text',
+            content: content || '',
+            type: msgType,
             replyToId: replyToId ?? null,
             status: 'sent',
+            attachments: attachmentId
+              ? { connect: { id: attachmentId } }
+              : undefined,
           },
           include: {
             sender: {
@@ -199,6 +218,7 @@ io.on('connection', async (socket) => {
                 user: { select: { id: true, displayName: true, avatar: true } },
               },
             },
+            attachments: true,
           },
         })
 

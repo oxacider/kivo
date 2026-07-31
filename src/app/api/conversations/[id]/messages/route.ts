@@ -31,6 +31,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
             user: { select: { id: true, displayName: true, avatar: true } },
           },
         },
+        attachments: true,
       },
       orderBy: { createdAt: 'asc' },
       take: 50,

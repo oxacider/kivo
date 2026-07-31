@@ -98,6 +98,7 @@ model Message {
   replyTo      Message?     @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
   replies      Message[]    @relation("MessageReplies")
   reactions    Reaction[]    @relation("MessageReactions")
+  attachments  MediaAttachment[] @relation("MessageAttachments")
 
   @@index([conversationId])
   @@index([senderId])
@@ -128,4 +129,21 @@ model FCMToken {
 
   @@unique([userId, token])
   @@index([token])
+}
+
+model MediaAttachment {
+  id          String   @id @default(cuid())
+  messageId   String?
+  type        String   // 'image' | 'video' | 'file' | 'voice'
+  url         String   // base64 data URL
+  name        String   // original filename
+  size        Int      // bytes
+  mimeType    String
+  width       Int?
+  height      Int?
+  createdAt   DateTime @default(now())
+
+  message     Message? @relation("MessageAttachments", fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
 }

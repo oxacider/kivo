@@ -12,13 +12,12 @@ import {
   Send, Smile, MoreHorizontal, ArrowLeft, Check, CheckCheck,
   Edit3, Trash2, X, CornerDownRight, UserX, Forward, Search,
   Copy, RotateCcw, ImageIcon, Paperclip, Mic, Clock,
-  AlertCircle, Sparkles
+  AlertCircle, Sparkles, Loader2, Upload
 } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
 import { getSocket } from '@/lib/socket';
-import Image from 'next/image';
-import type { Message, Reaction } from '@/types';
+import type { Message, Reaction, PendingImage, MediaAttachment } from '@/types';
 
 function getInitials(name: string) { return name.slice(0, 2).toUpperCase(); }
 
@@ -174,8 +173,89 @@ function ProfilePreview({ user, children }: { user: { displayName: string; usern
 }
 
 // ===================== MAIN COMPONENT =====================
+
+// --- Image Message Bubble ---
+function ImageMessageBubble({ attachment, isMine, isSending }: { attachment: MediaAttachment; isMine: boolean; isSending: boolean }) {
+  const [loaded, setLoaded] = useState(false);
+  const [showFull, setShowFull] = useState(false);
+  const isLandscape = (attachment.width && attachment.height) ? attachment.width > attachment.height : true;
+
+  return (
+    <>
+      <div
+        className={`relative overflow-hidden ${isLandscape ? 'max-w-[280px] sm:max-w-[320px]' : 'max-w-[200px]'} ${isSending ? 'animate-kivo-media-shimmer' : 'animate-kivo-image-enter'}`}
+        onClick={() => !isSending && setShowFull(true)}
+      >
+        {!loaded && (
+          <div className="absolute inset-0 bg-surface-2 flex items-center justify-center min-h-[120px]">
+            <Loader2 className="h-5 w-5 text-muted-foreground animate-spin" />
+          </div>
+        )}
+        <img
+          src={attachment.url}
+          alt={attachment.name || 'Image'}
+          className={`max-w-full rounded-xl object-cover transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+          style={isLandscape ? { maxHeight: '280px', width: '100%' } : { maxHeight: '300px' }}
+          onLoad={() => setLoaded(true)}
+        />
+        {isSending && (
+          <div className="absolute inset-0 bg-background/30 flex items-center justify-center rounded-xl">
+            <Loader2 className="h-6 w-6 text-primary animate-spin" />
+          </div>
+        )}
+      </div>
+      {/* Lightbox overlay */}
+      <AnimatePresence>
+        {showFull && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
+            onClick={() => setShowFull(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0.9 }}
+              className="relative max-w-[90vw] max-h-[90vh]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <img
+                src={attachment.url}
+                alt={attachment.name || 'Image'}
+                className="max-w-full max-h-[85vh] rounded-xl object-contain"
+              />
+              <button
+                onClick={() => setShowFull(false)}
+                className="absolute -top-3 -right-3 h-8 w-8 rounded-full bg-popover text-foreground flex items-center justify-center shadow-lg border border-border/50 hover:bg-surface-hover transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+}
+
+// --- Upload Progress Bar ---
+function UploadProgressBar({ progress }: { progress: number }) {
+  return (
+    <div className="h-1 w-full overflow-hidden rounded-full bg-surface-2">
+      <motion.div
+        className="h-full rounded-full bg-primary"
+        initial={{ width: 0 }}
+        animate={{ width: `${progress}%` }}
+        transition={{ duration: 0.3, ease: 'easeOut' }}
+      />
+    </div>
+  );
+}
+
 export function ConversationView() {
-  const { activeConversationId, conversations, messages, setMessages, addMessage, updateMessage, removeMessage, typingUsers, setActiveConversationId, updateConversation, addReaction, removeReaction } = useChatStore();
+  const { activeConversationId, conversations, messages, setMessages, addMessage, updateMessage, removeMessage, typingUsers, setActiveConversationId, updateConversation, addReaction, removeReaction, setMessageStatus } = useChatStore();
   const { user, token } = useAuthStore();
   const [input, setInput] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
@@ -188,8 +268,12 @@ export function ConversationView() {
   const [quickReactMsgId, setQuickReactMsgId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const typingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [wasAtBottom, setWasAtBottom] = useState(true);
+  const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [isUploading, setIsUploading] = useState(false);
 
   const activeConv = conversations.find((c) => c.id === activeConversationId);
   const otherUser = activeConv?.otherUser;
@@ -240,7 +324,11 @@ export function ConversationView() {
     const onNew = (msg: any) => {
       // Replace optimistic sending message with the real server message
       const msgs = useChatStore.getState().messages;
-      const sending = msgs.find(m => m.status === 'sending' && m.conversationId === msg.conversationId && m.content === msg.content && m.senderId === msg.senderId);
+      // For text messages: match by content
+      const textMatch = msgs.find(m => m.status === 'sending' && m.conversationId === msg.conversationId && m.content === msg.content && m.senderId === msg.senderId && !m.attachments?.length);
+      // For image messages: match by type + sender + conversation + no real id
+      const imageMatch = msgs.find(m => m.status === 'sending' && m.conversationId === msg.conversationId && m.type === 'image' && m.senderId === msg.senderId && m.id.startsWith('temp-'));
+      const sending = textMatch || imageMatch;
       if (sending && sending.id.startsWith('temp-')) {
         // Remove the temp message, the real one will be added by the store's addMessage
         useChatStore.getState().removeMessage(sending.id);
@@ -342,6 +430,161 @@ export function ConversationView() {
     });
   }, [input, activeConversationId, replyTo, user, addMessage]);
 
+  // --- Image selection handler ---
+  const handleImageSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('Only images are supported');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Image must be under 5MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new window.Image();
+      img.onload = () => {
+        setPendingImage({
+          file,
+          dataUrl: reader.result as string,
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+          mimeType: file.type,
+          name: file.name,
+          size: file.size,
+        });
+        inputRef.current?.focus();
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+    // Reset input so the same file can be selected again
+    e.target.value = '';
+  }, []);
+
+  // --- Send image message with upload ---
+  const sendImageMessage = useCallback(() => {
+    if (!pendingImage || !activeConversationId || !token || isUploading) return;
+    setIsUploading(true);
+    setUploadProgress(0);
+
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const caption = input.trim();
+    const tempAttachment: MediaAttachment = {
+      id: `temp-att-${Date.now()}`,
+      type: 'image',
+      url: pendingImage.dataUrl,
+      name: pendingImage.name,
+      size: pendingImage.size,
+      mimeType: pendingImage.mimeType,
+      width: pendingImage.width,
+      height: pendingImage.height,
+    };
+
+    // Optimistic message with local preview
+    const optimisticMsg: Message = {
+      id: tempId,
+      conversationId: activeConversationId,
+      senderId: user?.id || '',
+      content: caption,
+      type: 'image',
+      status: 'sending',
+      replyToId: replyTo?.id || null,
+      edited: false,
+      deleted: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      attachments: [tempAttachment],
+      sender: user ? { id: user.id, email: user.email, displayName: user.displayName, username: user.username, avatar: user.avatar, bio: user.bio, status: user.status, online: user.online, lastSeen: user.lastSeen, theme: user.theme, emailVerified: user.emailVerified, showOnline: user.showOnline, showLastSeen: user.showLastSeen, showReadReceipts: user.showReadReceipts, createdAt: user.createdAt, updatedAt: user.updatedAt } : undefined,
+    };
+    addMessage(optimisticMsg);
+
+    // Clear UI state
+    setInput('');
+    setPendingImage(null);
+    setReplyTo(null);
+    setShowEmoji(false);
+    if (inputRef.current) inputRef.current.style.height = 'auto';
+
+    // Upload using XMLHttpRequest for progress tracking
+    const formData = new FormData();
+    formData.append('file', pendingImage.file);
+    formData.append('width', String(pendingImage.width));
+    formData.append('height', String(pendingImage.height));
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/media/upload');
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        setUploadProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const res = JSON.parse(xhr.responseText);
+          if (res.success && res.data?.id) {
+            // Send message via socket with attachment
+            const socket = getSocket();
+            socket.emit('message:send', {
+              conversationId: activeConversationId,
+              content: caption,
+              type: 'image',
+              replyToId: optimisticMsg.replyToId,
+              attachmentId: res.data.id,
+            });
+            // Update optimistic message with real attachment
+            updateMessage(tempId, {
+              attachments: [{
+                id: res.data.id,
+                type: 'image',
+                url: pendingImage.dataUrl,
+                name: pendingImage.name,
+                size: pendingImage.size,
+                mimeType: pendingImage.mimeType,
+                width: pendingImage.width,
+                height: pendingImage.height,
+              }],
+            });
+          } else {
+            setMessageStatus(tempId, 'failed');
+            toast.error(res.error || 'Upload failed');
+          }
+        } catch {
+          setMessageStatus(tempId, 'failed');
+          toast.error('Upload failed');
+        }
+      } else {
+        setMessageStatus(tempId, 'failed');
+        toast.error('Upload failed');
+      }
+      setIsUploading(false);
+      setUploadProgress(0);
+    };
+
+    xhr.onerror = () => {
+      setMessageStatus(tempId, 'failed');
+      toast.error('Network error during upload');
+      setIsUploading(false);
+      setUploadProgress(0);
+    };
+
+    xhr.send(formData);
+  }, [pendingImage, activeConversationId, token, user, input, replyTo, isUploading, addMessage, updateMessage, setMessageStatus]);
+
+  const handleSend = useCallback(() => {
+    if (pendingImage) {
+      sendImageMessage();
+    } else {
+      sendMessage();
+    }
+  }, [pendingImage, sendImageMessage, sendMessage]);
+
   const retryMessage = useCallback((msg: Message) => {
     if (!activeConversationId || msg.status !== 'failed') return;
     const socket = getSocket();
@@ -358,7 +601,7 @@ export function ConversationView() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      if (editingId) { saveEdit(); } else { sendMessage(); }
+      if (editingId) { saveEdit(); } else { handleSend(); }
     }
   };
 
@@ -455,7 +698,7 @@ export function ConversationView() {
       <div className="flex h-full flex-col items-center justify-center bg-background">
         <div className="text-center">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl overflow-hidden">
-            <Image src="/logo.png" alt="KIVO" width={64} height={64} quality={100} sizes="64px" className="object-contain p-1.5 opacity-30" />
+            <img src="/logo.png" alt="KIVO" className="h-full w-full object-contain p-1.5 opacity-30" />
           </div>
           <h3 className="text-sm font-medium text-muted-foreground">Select a conversation</h3>
           <p className="mt-1 text-xs text-muted-foreground/60">Choose a chat to start messaging</p>
@@ -596,22 +839,50 @@ export function ConversationView() {
                   )}
 
                   <div className="group relative flex items-end gap-1.5">
-                    <div className={`relative rounded-2xl px-3 py-1.5 ${
-                      isFailed
-                        ? 'bg-destructive/10 text-destructive border border-destructive/20 rounded-br-md'
-                        : isMine
-                          ? 'bg-primary text-primary-foreground rounded-br-md'
-                          : 'bg-surface-2 text-foreground rounded-bl-md'
-                    }`}>
-                      {msg.deleted ? (
-                        <p className="text-sm italic opacity-50">This message was deleted</p>
-                      ) : (
-                        <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{msg.content}</p>
-                      )}
-                      {msg.edited && !msg.deleted && (
-                        <span className="text-[9px] opacity-50">edited</span>
-                      )}
-                    </div>
+                    {/* Image message */}
+                    {msg.type === 'image' && msg.attachments && msg.attachments.length > 0 && !msg.deleted ? (
+                      <div className="relative">
+                        <div className={`rounded-2xl overflow-hidden ${isMine ? 'rounded-br-md' : 'rounded-bl-md'} ${isFailed ? 'border border-destructive/20' : ''}`}>
+                          <ImageMessageBubble
+                            attachment={msg.attachments[0]}
+                            isMine={isMine}
+                            isSending={isSending}
+                          />
+                          {/* Upload progress on optimistic image */}
+                          {isSending && msg.id.startsWith('temp-') && (
+                            <div className="px-3 pb-2 bg-inherit">
+                              <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                                <Upload className="h-3 w-3 animate-pulse" />
+                                <span>Uploading...</span>
+                              </div>
+                              <UploadProgressBar progress={uploadProgress} />
+                            </div>
+                          )}
+                          {msg.content && (
+                            <div className={`px-3 pb-2 ${isMine ? 'text-primary-foreground' : ''}`}>
+                              <p className="text-sm leading-relaxed break-words">{msg.content}</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className={`relative rounded-2xl px-3 py-1.5 ${
+                        isFailed
+                          ? 'bg-destructive/10 text-destructive border border-destructive/20 rounded-br-md'
+                          : isMine
+                            ? 'bg-primary text-primary-foreground rounded-br-md'
+                            : 'bg-surface-2 text-foreground rounded-bl-md'
+                      }`}>
+                        {msg.deleted ? (
+                          <p className="text-sm italic opacity-50">This message was deleted</p>
+                        ) : (
+                          <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">{msg.content}</p>
+                        )}
+                        {msg.edited && !msg.deleted && (
+                          <span className="text-[9px] opacity-50">edited</span>
+                        )}
+                      </div>
+                    )}
 
                     {/* Message action buttons (hover) */}
                     {isLast && !msg.deleted && !isSending && (
@@ -798,6 +1069,40 @@ export function ConversationView() {
         )}
       </AnimatePresence>
 
+      {/* ========== IMAGE PREVIEW BAR ========== */}
+      <AnimatePresence>
+        {pendingImage && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="overflow-hidden border-t border-border/30 bg-surface-1 animate-kivo-preview-slide"
+          >
+            <div className="flex items-center gap-3 px-4 py-3">
+              <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-surface-2">
+                <img
+                  src={pendingImage.dataUrl}
+                  alt="Preview"
+                  className="h-full w-full object-cover"
+                />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium truncate">{pendingImage.name}</p>
+                <p className="text-[10px] text-muted-foreground">
+                  {(pendingImage.size / 1024).toFixed(1)} KB · {pendingImage.width}×{pendingImage.height}
+                </p>
+              </div>
+              <button
+                onClick={() => setPendingImage(null)}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* ========== EMOJI PICKER ========== */}
       <AnimatePresence>
         {showEmoji && (
@@ -820,16 +1125,36 @@ export function ConversationView() {
       {/* ========== INPUT BAR ========== */}
       <div className="border-t border-border/30 bg-surface-1 px-4 py-3">
         <div className="mx-auto flex max-w-2xl items-end gap-2">
-          {/* Media attach buttons (architecture prep) */}
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/gif,image/webp"
+            onChange={handleImageSelect}
+            className="hidden"
+          />
+
+          {/* Attachment button - visible on all screens */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors ${
+              pendingImage
+                ? 'bg-primary/10 text-primary'
+                : 'text-muted-foreground hover:text-foreground hover:bg-surface-hover'
+            } disabled:opacity-40`}
+            title="Attach image"
+          >
+            <ImageIcon className="h-[18px] w-[18px]" />
+          </button>
+
+          {/* File/Voice buttons (desktop only, architecture prep) */}
           <div className="hidden sm:flex items-center gap-1">
-            <button className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-colors" title="Attach image">
-              <ImageIcon className="h-4.5 w-4.5" />
-            </button>
             <button className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-colors" title="Attach file">
-              <Paperclip className="h-4.5 w-4.5" />
+              <Paperclip className="h-[18px] w-[18px]" />
             </button>
             <button className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground hover:text-foreground hover:bg-surface-hover transition-colors" title="Voice message">
-              <Mic className="h-4.5 w-4.5" />
+              <Mic className="h-[18px] w-[18px]" />
             </button>
           </div>
 
@@ -839,7 +1164,7 @@ export function ConversationView() {
               showEmoji ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-surface-hover'
             }`}
           >
-            <Smile className="h-4.5 w-4.5" />
+            <Smile className="h-[18px] w-[18px]" />
           </button>
           <div className="flex-1 relative">
             <textarea
@@ -847,17 +1172,17 @@ export function ConversationView() {
               value={editingId ? editText : input}
               onChange={editingId ? (e) => setEditText(e.target.value) : handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder="Type a message..."
+              placeholder={pendingImage ? 'Add a caption...' : 'Type a message...'}
               rows={1}
               className="w-full resize-none rounded-xl bg-surface-2 border border-border/30 px-4 py-2.5 text-sm leading-relaxed placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30 max-h-[120px]"
             />
           </div>
           <button
-            onClick={editingId ? saveEdit : forwardMsg ? sendForward : sendMessage}
-            disabled={editingId ? !editText.trim() : forwardMsg ? false : !input.trim()}
+            onClick={editingId ? saveEdit : forwardMsg ? sendForward : handleSend}
+            disabled={isUploading || (editingId ? !editText.trim() : forwardMsg ? false : (!input.trim() && !pendingImage))}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-all hover:opacity-90 disabled:opacity-40 kivo-glow"
           >
-            {editingId ? <Check className="h-4 w-4" /> : forwardMsg ? <Forward className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+            {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : editingId ? <Check className="h-4 w-4" /> : forwardMsg ? <Forward className="h-4 w-4" /> : <Send className="h-4 w-4" />}
           </button>
         </div>
       </div>
