@@ -30,7 +30,7 @@ export async function POST(request: Request) {
       data: { email, password: hashedPassword, displayName, username },
     });
 
-    const token = generateToken(user.id);
+    const token = await generateToken(user.id);
     const { password: _, ...safeUser } = user;
 
     return Response.json({ success: true, data: { user: safeUser, token } }, { status: 201 });

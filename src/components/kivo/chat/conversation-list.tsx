@@ -6,11 +6,11 @@ import { useAuthStore } from '@/stores/auth-store';
 import { useFriendsStore } from '@/stores/friends-store';
 import { useUIStore } from '@/stores/ui-store';
 import { api } from '@/lib/api';
+import { connectSocket, disconnectSocket } from '@/lib/socket';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Search, Bell, MessageSquarePlus } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { format } from 'date-fns';
-import { connectSocket, disconnectSocket } from '@/lib/socket';
 import { toast } from 'sonner';
 import type { Conversation, User } from '@/types';
 
@@ -56,8 +56,8 @@ export function ConversationList() {
     setTyping, clearTypingForConversation, clearUnread,
   } = useChatStore();
   const { user, token } = useAuthStore();
-  const { setFriends, setPendingRequests, setSearchOpen, setNotificationsOpen, setMobileSidebarOpen } = useUIStore();
-  const { pendingRequests } = useFriendsStore();
+  const { setSearchOpen, setNotificationsOpen, setMobileSidebarOpen } = useUIStore();
+  const { pendingRequests, setFriends, setPendingRequests } = useFriendsStore();
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
   const socketRef = useRef<any>(null);
 
@@ -82,7 +82,7 @@ export function ConversationList() {
     if (!token) return;
     if (isDemo) return;
     loadData();
-    const socket = connectSocket(user!.id);
+    const socket = connectSocket(token);
     socketRef.current = socket;
 
     socket.on('message:new', (msg: any) => {
@@ -99,7 +99,7 @@ export function ConversationList() {
     });
 
     socket.on('message:updated', (msg: any) => { updateMessage(msg.id, msg); });
-    socket.on('message:deleted', (data: any) => { removeMessage(data.id); });
+    socket.on('message:deleted', (data: any) => { removeMessage(data.messageId); });
     socket.on('user:typing', (data: any) => { setTyping(data.userId, data.conversationId, data.isTyping); });
     socket.on('message:read', (data: any) => { updateConversation(data.conversationId, { unreadCount: 0 } as Partial<Conversation>); });
 

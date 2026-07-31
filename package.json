@@ -58,6 +58,7 @@
     "firebase": "^12.17.0",
     "framer-motion": "^12.23.2",
     "input-otp": "^1.4.2",
+    "jose": "^6.2.5",
     "lucide-react": "^0.525.0",
     "next": "^16.1.1",
     "next-auth": "^4.24.11",

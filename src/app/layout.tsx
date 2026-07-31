@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
 import { FirebaseProvider } from "@/components/firebase-provider";
+import { ErrorBoundary } from "@/components/error-boundary";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -54,6 +55,7 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange={false}
         >
+          <ErrorBoundary>
           <FirebaseProvider>
             {children}
             <Toaster
@@ -63,6 +65,7 @@ export default function RootLayout({
               }}
             />
           </FirebaseProvider>
+          </ErrorBoundary>
         </ThemeProvider>
       </body>
     </html>

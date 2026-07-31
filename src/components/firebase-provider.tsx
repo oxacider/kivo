@@ -32,7 +32,7 @@ function registerServiceWorker() {
 
 function handleForegroundMessage(payload: MessagePayload) {
   const notification = payload.notification;
-  const data = (payload.data || {}) as KIVONotificationData;
+  const data = (payload.data || {}) as unknown as KIVONotificationData;
 
   // Don't show notification if user is already viewing this conversation
   const activeId = useChatStore.getState().activeConversationId;

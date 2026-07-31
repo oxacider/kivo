@@ -22,7 +22,7 @@ export async function POST(request: Request) {
 
     await db.user.update({ where: { id: user.id }, data: { online: true, lastSeen: new Date() } });
 
-    const token = generateToken(user.id);
+    const token = await generateToken(user.id);
     const { password: _, ...safeUser } = user;
 
     return Response.json({ success: true, data: { user: safeUser, token } });

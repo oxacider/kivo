@@ -1,5 +1,5 @@
 type RequestOptions = {
-  token?: string;
+  token?: string | null;
   body?: unknown;
   method?: string;
 };

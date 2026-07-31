@@ -16,11 +16,12 @@ export function getSocket(): Socket {
   return socket;
 }
 
-export function connectSocket(userId: string): Socket {
+export function connectSocket(token: string): Socket {
   const s = getSocket();
   if (!s.connected) {
+    // Pass JWT in handshake auth — server middleware verifies before accepting
+    s.auth = { token };
     s.connect();
-    s.emit('auth', { userId });
   }
   return s;
 }

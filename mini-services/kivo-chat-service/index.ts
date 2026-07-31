@@ -1,6 +1,26 @@
 import { createServer } from 'http'
 import { Server } from 'socket.io'
 import { db } from '../../src/lib/db'
+import * as jose from 'jose'
+
+// ---------------------------------------------------------------------------
+// JWT Verification (shared secret with main app)
+// ---------------------------------------------------------------------------
+
+const JWT_SECRET = process.env.JWT_SECRET
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  throw new Error('JWT_SECRET must be set and at least 32 characters')
+}
+const secretKey = new TextEncoder().encode(JWT_SECRET)
+
+async function verifySocketToken(token: string): Promise<string | null> {
+  try {
+    const { payload } = await jose.jwtVerify(token, secretKey, { algorithms: ['HS256'] })
+    return (payload as { userId?: string }).userId ?? null
+  } catch {
+    return null
+  }
+}
 
 // ---------------------------------------------------------------------------
 // HTTP + Socket.IO server
@@ -8,7 +28,6 @@ import { db } from '../../src/lib/db'
 
 const httpServer = createServer()
 const io = new Server(httpServer, {
-  // DO NOT change the path – Caddy forwards to this port based on path: '/'
   path: '/',
   cors: {
     origin: '*',
@@ -31,13 +50,29 @@ const socketToUser = new Map<string, string>()
 // Helpers
 // ---------------------------------------------------------------------------
 
-function getOtherUserId(conversationId: string, myUserId: string): Promise<string | null> {
-  return db.conversation
-    .findUnique({ where: { id: conversationId } })
-    .then((conv) => {
-      if (!conv) return null
-      return conv.user1Id === myUserId ? conv.user2Id : conv.user1Id
-    })
+async function getConversation(convId: string) {
+  return db.conversation.findUnique({ where: { id: convId } })
+}
+
+function isParticipant(conv: { user1Id: string; user2Id: string } | null, userId: string): boolean {
+  if (!conv) return false
+  return conv.user1Id === userId || conv.user2Id === userId
+}
+
+function getOtherUserId(conv: { user1Id: string; user2Id: string }, myUserId: string): string {
+  return conv.user1Id === myUserId ? conv.user2Id : conv.user1Id
+}
+
+async function isBlocked(userId1: string, userId2: string): Promise<boolean> {
+  const count = await db.block.count({
+    where: {
+      OR: [
+        { blockerId: userId1, blockedId: userId2 },
+        { blockerId: userId2, blockedId: userId1 },
+      ],
+    },
+  })
+  return count > 0
 }
 
 function emitToUser(userId: string, event: string, data: unknown) {
@@ -56,39 +91,49 @@ async function getSenderInfo(userId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Socket authentication middleware
+// ---------------------------------------------------------------------------
+
+io.use(async (socket, next) => {
+  const token = socket.handshake.auth?.token as string | undefined
+  if (!token) {
+    return next(new Error('Authentication required'))
+  }
+
+  const userId = await verifySocketToken(token)
+  if (!userId) {
+    return next(new Error('Invalid or expired token'))
+  }
+
+  // Verify user exists in DB
+  const user = await db.user.findUnique({ where: { id: userId } })
+  if (!user) {
+    return next(new Error('User not found'))
+  }
+
+  // Attach userId to socket data
+  socket.data.userId = userId
+  next()
+})
+
+// ---------------------------------------------------------------------------
 // Socket connection handler
 // ---------------------------------------------------------------------------
 
-io.on('connection', (socket) => {
-  console.log(`[socket] connected: ${socket.id}`)
+io.on('connection', async (socket) => {
+  const userId: string = socket.data.userId
+  console.log(`[socket] authenticated: ${userId} (${socket.id})`)
 
-  // -----------------------------------------------------------------------
-  // auth – authenticate a socket with a userId
-  // -----------------------------------------------------------------------
-  socket.on('auth', async ({ userId }: { userId: string }) => {
-    try {
-      const user = await db.user.findUnique({ where: { id: userId } })
-      if (!user) {
-        socket.emit('auth:error', { message: 'User not found' })
-        return
-      }
-
-      onlineUsers.set(userId, socket.id)
-      socketToUser.set(socket.id, userId)
-
-      // Mark user online in DB
-      await db.user.update({
-        where: { id: userId },
-        data: { online: true, lastSeen: new Date() },
-      })
-
-      socket.emit('auth:success', { userId })
-      console.log(`[auth] ${userId} is now online (${onlineUsers.size} total)`)
-    } catch (err) {
-      console.error('[auth] error', err)
-      socket.emit('auth:error', { message: 'Authentication failed' })
-    }
+  // Track online
+  onlineUsers.set(userId, socket.id)
+  socketToUser.set(socket.id, userId)
+  await db.user.update({
+    where: { id: userId },
+    data: { online: true, lastSeen: new Date() },
   })
+
+  socket.emit('auth:success', { userId })
+  console.log(`[auth] ${userId} is now online (${onlineUsers.size} total)`)
 
   // -----------------------------------------------------------------------
   // message:send – save message to DB & deliver to recipient
@@ -106,10 +151,18 @@ io.on('connection', (socket) => {
       type?: string
       replyToId?: string
     }) => {
-      const userId = socketToUser.get(socket.id)
-      if (!userId) return
-
       try {
+        // Validate conversation membership
+        const conv = await getConversation(conversationId)
+        if (!isParticipant(conv, userId)) return
+
+        // Validate no block between participants
+        const otherId = getOtherUserId(conv, userId)
+        if (await isBlocked(userId, otherId)) return
+
+        // Validate content
+        if (!content || typeof content !== 'string' || content.length > 10000) return
+
         const message = await db.message.create({
           data: {
             conversationId,
@@ -128,22 +181,13 @@ io.on('connection', (socket) => {
           },
         })
 
-        // Update conversation updatedAt
         await db.conversation.update({
           where: { id: conversationId },
           data: { updatedAt: new Date() },
         })
 
-        // Emit to recipient
-        const otherUserId = await getOtherUserId(conversationId, userId)
-        if (otherUserId) {
-          emitToUser(otherUserId, 'message:new', message)
-        }
-
-        // Also echo back to sender so they have the server-generated id/timestamps
+        emitToUser(otherId, 'message:new', message)
         socket.emit('message:new', message)
-
-        console.log(`[message:send] ${userId} → conversation ${conversationId}`)
       } catch (err) {
         console.error('[message:send] error', err)
       }
@@ -151,15 +195,19 @@ io.on('connection', (socket) => {
   )
 
   // -----------------------------------------------------------------------
-  // message:edit – update message content
+  // message:edit
   // -----------------------------------------------------------------------
   socket.on(
     'message:edit',
     async ({ messageId, content }: { messageId: string; content: string }) => {
-      const userId = socketToUser.get(socket.id)
-      if (!userId) return
-
       try {
+        const msg = await db.message.findUnique({ where: { id: messageId } })
+        if (!msg || msg.senderId !== userId || msg.deleted) return
+
+        // Verify sender is still a participant
+        const conv = await getConversation(msg.conversationId)
+        if (!isParticipant(conv, userId)) return
+
         const updated = await db.message.update({
           where: { id: messageId, senderId: userId, deleted: false },
           data: { content, edited: true, updatedAt: new Date() },
@@ -170,14 +218,9 @@ io.on('connection', (socket) => {
           },
         })
 
-        // Emit to the other participant
-        const otherUserId = await getOtherUserId(updated.conversationId, userId)
-        if (otherUserId) {
-          emitToUser(otherUserId, 'message:updated', updated)
-        }
+        const otherId = getOtherUserId(conv, userId)
+        emitToUser(otherId, 'message:updated', updated)
         socket.emit('message:updated', updated)
-
-        console.log(`[message:edit] ${userId} edited message ${messageId}`)
       } catch (err) {
         console.error('[message:edit] error', err)
       }
@@ -185,30 +228,26 @@ io.on('connection', (socket) => {
   )
 
   // -----------------------------------------------------------------------
-  // message:delete – soft-delete a message
+  // message:delete
   // -----------------------------------------------------------------------
   socket.on(
     'message:delete',
     async ({ messageId }: { messageId: string }) => {
-      const userId = socketToUser.get(socket.id)
-      if (!userId) return
-
       try {
-        const message = await db.message.findUnique({ where: { id: messageId } })
-        if (!message || message.senderId !== userId) return
+        const msg = await db.message.findUnique({ where: { id: messageId } })
+        if (!msg || msg.senderId !== userId) return
 
-        const deleted = await db.message.update({
+        const conv = await getConversation(msg.conversationId)
+        if (!isParticipant(conv, userId)) return
+
+        await db.message.update({
           where: { id: messageId },
           data: { deleted: true, content: '', updatedAt: new Date() },
         })
 
-        const otherUserId = await getOtherUserId(message.conversationId, userId)
-        if (otherUserId) {
-          emitToUser(otherUserId, 'message:deleted', { messageId, conversationId: message.conversationId })
-        }
-        socket.emit('message:deleted', { messageId, conversationId: message.conversationId })
-
-        console.log(`[message:delete] ${userId} deleted message ${messageId}`)
+        const otherId = getOtherUserId(conv, userId)
+        emitToUser(otherId, 'message:deleted', { messageId, conversationId: msg.conversationId })
+        socket.emit('message:deleted', { messageId, conversationId: msg.conversationId })
       } catch (err) {
         console.error('[message:delete] error', err)
       }
@@ -216,31 +255,22 @@ io.on('connection', (socket) => {
   )
 
   // -----------------------------------------------------------------------
-  // message:read – mark unread messages as read
+  // message:read
   // -----------------------------------------------------------------------
   socket.on(
     'message:read',
     async ({ conversationId }: { conversationId: string }) => {
-      const userId = socketToUser.get(socket.id)
-      if (!userId) return
-
       try {
-        // Mark all messages in the conversation not sent by this user as "delivered"/"read"
+        const conv = await getConversation(conversationId)
+        if (!isParticipant(conv, userId)) return
+
         await db.message.updateMany({
-          where: {
-            conversationId,
-            senderId: { not: userId },
-            status: { not: 'read' },
-          },
+          where: { conversationId, senderId: { not: userId }, status: { not: 'read' } },
           data: { status: 'read' },
         })
 
-        const otherUserId = await getOtherUserId(conversationId, userId)
-        if (otherUserId) {
-          emitToUser(otherUserId, 'message:read', { conversationId, userId })
-        }
-
-        console.log(`[message:read] ${userId} read messages in ${conversationId}`)
+        const otherId = getOtherUserId(conv, userId)
+        emitToUser(otherId, 'message:read', { conversationId, userId })
       } catch (err) {
         console.error('[message:read] error', err)
       }
@@ -253,47 +283,32 @@ io.on('connection', (socket) => {
   socket.on(
     'typing:start',
     async ({ conversationId }: { conversationId: string }) => {
-      const userId = socketToUser.get(socket.id)
-      if (!userId) return
-
-      const otherUserId = await getOtherUserId(conversationId, userId)
-      if (otherUserId) {
-        emitToUser(otherUserId, 'user:typing', { conversationId, userId, isTyping: true })
-      }
+      const conv = await getConversation(conversationId)
+      if (!isParticipant(conv, userId)) return
+      const otherId = getOtherUserId(conv, userId)
+      emitToUser(otherId, 'user:typing', { conversationId, userId, isTyping: true })
     },
   )
 
   socket.on(
     'typing:stop',
     async ({ conversationId }: { conversationId: string }) => {
-      const userId = socketToUser.get(socket.id)
-      if (!userId) return
-
-      const otherUserId = await getOtherUserId(conversationId, userId)
-      if (otherUserId) {
-        emitToUser(otherUserId, 'user:typing', { conversationId, userId, isTyping: false })
-      }
+      const conv = await getConversation(conversationId)
+      if (!isParticipant(conv, userId)) return
+      const otherId = getOtherUserId(conv, userId)
+      emitToUser(otherId, 'user:typing', { conversationId, userId, isTyping: false })
     },
   )
 
   // -----------------------------------------------------------------------
-  // user:status – update status text & broadcast
+  // user:status
   // -----------------------------------------------------------------------
   socket.on(
     'user:status',
     async ({ status }: { status: string }) => {
-      const userId = socketToUser.get(socket.id)
-      if (!userId) return
-
       try {
-        await db.user.update({
-          where: { id: userId },
-          data: { status },
-        })
-
-        // Broadcast to all online users
+        await db.user.update({ where: { id: userId }, data: { status } })
         io.emit('user:status-change', { userId, status })
-        console.log(`[user:status] ${userId} → "${status}"`)
       } catch (err) {
         console.error('[user:status] error', err)
       }
@@ -304,16 +319,9 @@ io.on('connection', (socket) => {
   // disconnect
   // -----------------------------------------------------------------------
   socket.on('disconnect', async () => {
-    const userId = socketToUser.get(socket.id)
-    if (!userId) {
-      console.log(`[socket] disconnected (unauthenticated): ${socket.id}`)
-      return
-    }
-
     onlineUsers.delete(userId)
     socketToUser.delete(socket.id)
 
-    // Mark user offline in DB
     try {
       await db.user.update({
         where: { id: userId },
@@ -327,9 +335,6 @@ io.on('connection', (socket) => {
     console.log(`[disconnect] ${userId} went offline (${onlineUsers.size} still online)`)
   })
 
-  // -----------------------------------------------------------------------
-  // error handler
-  // -----------------------------------------------------------------------
   socket.on('error', (error) => {
     console.error(`[socket] error (${socket.id}):`, error)
   })

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { enableNotifications, disableNotifications } from '@/lib/notifications';
+import { api } from '@/lib/api';
 import type { User } from '@/types';
 
 interface AuthState {
@@ -30,7 +31,12 @@ export const useAuthStore = create<AuthState>()(
       setLoading: (isLoading) => set({ isLoading }),
 
       logout: () => {
-        // Remove FCM token before clearing auth (fire-and-forget)
+        const { token } = get();
+        // Server-side: invalidate JWT + mark offline
+        if (token && !token.startsWith('demo-')) {
+          api('/auth/logout', { token, method: 'POST', body: {} }).catch(() => {});
+        }
+        // Client-side: remove FCM token
         disableNotifications().catch(() => {});
         set({ user: null, token: null });
       },
