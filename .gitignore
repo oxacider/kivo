@@ -52,3 +52,11 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# dev artifacts (tool caches, task notes)
+tool-results/
+agent-ctx/
+download/
+*.pid
+db/custom.db
+examples/
