@@ -19,6 +19,9 @@ model User {
   online           Boolean   @default(false)
   lastSeen         DateTime  @default(now())
   theme            String    @default("system")
+  showOnline       Boolean   @default(true)
+  showLastSeen     Boolean   @default(true)
+  showReadReceipts Boolean   @default(true)
   emailVerified      Boolean   @default(false)
   verificationCode   String?
   resetCode          String?

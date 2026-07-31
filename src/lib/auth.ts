@@ -52,6 +52,7 @@ export async function getAuthUser(request: Request): Promise<User | null> {
       id: true, email: true, displayName: true, username: true,
       avatar: true, bio: true, status: true, online: true,
       lastSeen: true, theme: true, emailVerified: true,
+      showOnline: true, showLastSeen: true, showReadReceipts: true,
       createdAt: true, updatedAt: true,
     },
   });

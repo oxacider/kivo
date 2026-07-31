@@ -157,6 +157,9 @@ export function SignInForm() {
                 lastSeen: new Date().toISOString(),
                 theme: 'dark',
                 emailVerified: true,
+                showOnline: true,
+                showLastSeen: true,
+                showReadReceipts: true,
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
               });

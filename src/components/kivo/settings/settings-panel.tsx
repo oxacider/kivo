@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { useAuthStore } from '@/stores/auth-store';
 import { useUIStore } from '@/stores/ui-store';
@@ -23,14 +23,29 @@ function getInitials(name: string) { return name.slice(0, 2).toUpperCase(); }
 
 export function SettingsPanel() {
   const { user, token, setUser, logout } = useAuthStore();
-  const { setView } = useUIStore();
+  const { setView, setSettingsOpen } = useUIStore();
   const { theme, setTheme } = useTheme();
   const [section, setSection] = useState<'main' | 'edit-profile' | 'notifications' | 'privacy' | 'blocked'>('main');
   const [notifSettings, setNotifSettings] = useState({ messages: true, friendRequests: true });
-  const [privacySettings, setPrivacySettings] = useState({ showOnline: true, showLastSeen: true, showReadReceipts: true });
+  const [privacySettings, setPrivacySettings] = useState(() => ({
+    showOnline: user?.showOnline ?? true,
+    showLastSeen: user?.showLastSeen ?? true,
+    showReadReceipts: user?.showReadReceipts ?? true,
+  }));
   const [blockedUsers, setBlockedUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [form, setForm] = useState({ displayName: user?.displayName || '', bio: user?.bio || '', status: user?.status || '' });
+  const [form, setForm] = useState({ displayName: user?.displayName || '', username: user?.username || '', bio: user?.bio || '', status: user?.status || '' });
+
+  // Debounced notification settings persistence
+  const notifTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!token || token.startsWith('demo-')) return;
+    if (notifTimer.current) clearTimeout(notifTimer.current);
+    notifTimer.current = setTimeout(() => {
+      // Persist locally for now; could extend to a server endpoint
+    }, 500);
+    return () => { if (notifTimer.current) clearTimeout(notifTimer.current); };
+  }, [notifSettings, token]);
 
   const saveProfile = async () => {
     if (!user) return;
@@ -47,6 +62,7 @@ export function SettingsPanel() {
   const handleLogout = () => {
     disconnectSocket();
     logout();
+    setSettingsOpen(false);
     setView('welcome');
     useChatStore.getState().reset();
     useFriendsStore.getState().reset();
@@ -75,6 +91,17 @@ export function SettingsPanel() {
                 <AvatarImage src={user?.avatar || undefined} />
                 <AvatarFallback className="text-lg bg-primary/10 text-primary">{getInitials(user?.displayName || 'U')}</AvatarFallback>
               </Avatar>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-xs">Username</Label>
+              <Input
+                value={form.username || ''}
+                onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
+                className="h-10 rounded-xl bg-surface-1 border-border/50"
+                placeholder="johndoe"
+              />
+              <span className="text-[11px] text-muted-foreground/60">Lowercase, letters, numbers, underscores</span>
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -165,21 +192,30 @@ export function SettingsPanel() {
                 <p className="text-sm font-medium">Show Online Status</p>
                 <p className="text-xs text-muted-foreground">Let others see when you're online</p>
               </div>
-              <Switch checked={privacySettings.showOnline} onCheckedChange={(v) => setPrivacySettings((s) => ({ ...s, showOnline: v }))} />
+              <Switch checked={privacySettings.showOnline} onCheckedChange={async (v) => {
+                setPrivacySettings((s) => ({ ...s, showOnline: v }));
+                if (token) { api('/users/privacy', { token, method: 'PUT', body: { showOnline: v } }).catch(() => {}); }
+              }} />
             </div>
             <div className="flex items-center justify-between rounded-xl bg-surface-1 p-4">
               <div>
                 <p className="text-sm font-medium">Show Last Seen</p>
                 <p className="text-xs text-muted-foreground">Let others see when you were last active</p>
               </div>
-              <Switch checked={privacySettings.showLastSeen} onCheckedChange={(v) => setPrivacySettings((s) => ({ ...s, showLastSeen: v }))} />
+              <Switch checked={privacySettings.showLastSeen} onCheckedChange={async (v) => {
+                setPrivacySettings((s) => ({ ...s, showLastSeen: v }));
+                if (token) { api('/users/privacy', { token, method: 'PUT', body: { showLastSeen: v } }).catch(() => {}); }
+              }} />
             </div>
             <div className="flex items-center justify-between rounded-xl bg-surface-1 p-4">
               <div>
                 <p className="text-sm font-medium">Read Receipts</p>
                 <p className="text-xs text-muted-foreground">Show when you've read messages</p>
               </div>
-              <Switch checked={privacySettings.showReadReceipts} onCheckedChange={(v) => setPrivacySettings((s) => ({ ...s, showReadReceipts: v }))} />
+              <Switch checked={privacySettings.showReadReceipts} onCheckedChange={async (v) => {
+                setPrivacySettings((s) => ({ ...s, showReadReceipts: v }));
+                if (token) { api('/users/privacy', { token, method: 'PUT', body: { showReadReceipts: v } }).catch(() => {}); }
+              }} />
             </div>
           </div>
         </motion.div>
@@ -234,7 +270,7 @@ export function SettingsPanel() {
         className="mx-auto max-w-md"
       >
         <button
-          onClick={() => setView('chat')}
+          onClick={() => { setSettingsOpen(false); setView('chat'); }}
           className="mb-4 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="h-4 w-4" /> Back

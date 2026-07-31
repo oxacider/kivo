@@ -15,6 +15,13 @@ import { VerifyEmailForm } from '@/components/kivo/auth/verify-email-form';
 import { ConversationList } from '@/components/kivo/chat/conversation-list';
 import { ConversationView } from '@/components/kivo/chat/conversation-view';
 import { SettingsPanel } from '@/components/kivo/settings/settings-panel';
+import { DesktopSidebar } from '@/components/kivo/navigation/desktop-sidebar';
+import { MobileBottomNav } from '@/components/kivo/navigation/mobile-bottom-nav';
+import { FriendsPage } from '@/components/kivo/friends/friends-page';
+import { ProfilePage } from '@/components/kivo/profile/profile-page';
+import { GlobalSearchOverlay } from '@/components/kivo/overlays/global-search-overlay';
+import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet';
+import { Bell } from 'lucide-react';
 import { api } from '@/lib/api';
 
 type ViewConfig = {
@@ -30,8 +37,6 @@ const viewConfig: Record<string, ViewConfig> = {
   'forgot-password': { key: 'forgot-password', slideFrom: 80 },
   'verify-email': { key: 'verify-email', slideFrom: 80 },
   chat: { key: 'chat' },
-  settings: { key: 'settings', slideFrom: 40 },
-  profile: { key: 'profile', slideFrom: 40 },
 };
 
 const pageVariants = {
@@ -122,7 +127,6 @@ export default function Home() {
             {currentView === 'signup' && <SignUpForm />}
             {currentView === 'forgot-password' && <ForgotPasswordForm />}
             {currentView === 'verify-email' && <VerifyEmailForm />}
-            {currentView === 'settings' && <SettingsPanel />}
             {currentView === 'chat' && <ChatLayout />}
           </motion.div>
         )}
@@ -132,20 +136,71 @@ export default function Home() {
 }
 
 function ChatLayout() {
+  const { mainTab, settingsOpen, setSettingsOpen, notificationsOpen, setNotificationsOpen } = useUIStore();
   const { activeConversationId } = useChatStore();
+
   return (
     <div className="flex h-full w-full">
-      <div className="w-full h-full md:w-80 md:min-w-80 md:border-r md:border-border/50">
-        <ConversationList />
+      <DesktopSidebar />
+
+      {/* Main content area — switches based on mainTab */}
+      <div className="flex-1 h-full overflow-hidden">
+        {mainTab === 'chat' && (
+          <div className="flex h-full w-full">
+            <div className="w-full h-full md:w-80 md:min-w-80 md:border-r md:border-border/50">
+              <ConversationList />
+            </div>
+            <div className="hidden md:flex flex-1 h-full">
+              <ConversationView key={activeConversationId} />
+            </div>
+            {activeConversationId && (
+              <div className="flex-1 h-full md:hidden absolute inset-0 z-30 bg-background">
+                <ConversationView key={activeConversationId} />
+              </div>
+            )}
+          </div>
+        )}
+        {mainTab === 'friends' && <FriendsPage />}
+        {mainTab === 'profile' && <ProfilePage />}
       </div>
-      <div className="hidden md:flex flex-1 h-full">
-        <ConversationView key={activeConversationId} />
-      </div>
-      {activeConversationId && (
-        <div className="flex-1 h-full md:hidden absolute inset-0 z-30 bg-background">
-          <ConversationView key={activeConversationId} />
-        </div>
-      )}
+
+      <MobileBottomNav />
+
+      {/* Settings overlay */}
+      <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <SheetContent side="right" className="overflow-y-auto p-0">
+          <SheetTitle className="sr-only">Settings</SheetTitle>
+          <SheetDescription className="sr-only">Manage your account settings</SheetDescription>
+          <SettingsPanel />
+        </SheetContent>
+      </Sheet>
+
+      {/* Notifications overlay */}
+      <Sheet open={notificationsOpen} onOpenChange={setNotificationsOpen}>
+        <SheetContent side="right">
+          <SheetTitle className="sr-only">Notifications</SheetTitle>
+          <SheetDescription className="sr-only">View your notifications</SheetDescription>
+          <div className="flex flex-col gap-4 p-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
+                <Bell className="h-5 w-5 text-primary" />
+              </div>
+              <h2 className="text-lg font-semibold">Notifications</h2>
+            </div>
+            <div className="flex flex-col items-center justify-center py-16 text-center">
+              <div className="w-16 h-16 rounded-2xl bg-surface-2 flex items-center justify-center mb-4">
+                <Bell size={28} className="text-muted-foreground" />
+              </div>
+              <p className="text-muted-foreground font-medium">No new notifications</p>
+              <p className="text-sm text-muted-foreground/60 mt-1">
+                You&apos;re all caught up
+              </p>
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      <GlobalSearchOverlay />
     </div>
   );
 }

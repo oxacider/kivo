@@ -10,6 +10,9 @@ export interface User {
   lastSeen: string;
   theme: string;
   emailVerified: boolean;
+  showOnline: boolean;
+  showLastSeen: boolean;
+  showReadReceipts: boolean;
   createdAt: string;
   updatedAt: string;
 }

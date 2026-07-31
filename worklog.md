@@ -197,3 +197,38 @@ Stage Summary:
 - Clean production build
 - Error Boundary added with KIVO-branded fallback UI
 - JWT auth, Socket.IO security, messaging security, and store connections were already implemented in a prior session
+
+---
+Task ID: phase2-core-features
+Agent: main
+Task: Phase 2 — Core Feature Completion
+
+Work Log:
+- **Email Verification**: Verified already fully implemented (register generates code, verify-email API, send-verification API, VerifyEmailForm with OTP input/resend/polling, login gates unverified users, page.tsx routes to verify-email view)
+- **Password Recovery**: Verified already fully implemented (forgot-password API with 15min code expiry, reset-password API, ForgotPasswordForm with 2-step OTP flow, sign-in has forgot-password link, anti-enumeration)
+- **Friend System — Fixed critical routing bug**:
+  - ChatLayout in page.tsx did not use `mainTab` from UI store — Friends and Profile tabs were non-functional
+  - DesktopSidebar and MobileBottomNav components existed but were never rendered
+  - settingsOpen/notificationsOpen UI states had no corresponding overlay UIs
+  - Rewrote ChatLayout to: render DesktopSidebar (left), switch main content by mainTab (chat/friends/profile), render MobileBottomNav (bottom), wrap SettingsPanel in Sheet overlay, add Notifications sheet with empty state, include GlobalSearchOverlay
+  - Fixed SettingsPanel back button and logout to call setSettingsOpen(false)
+  - Fixed ProfilePage: Edit Profile button opens settings sheet, removed literal \n in JSX, added useChatStore import
+  - Added SheetDescription to fix Radix Dialog accessibility warnings
+- **User Profile — Implemented missing features**:
+  - Added privacy fields to Prisma schema: showOnline, showLastSeen, showReadReceipts (all Boolean @default(true))
+  - Created POST /api/users/avatar — image upload with FormData, base64 conversion, 2MB limit, type validation
+  - Created PUT /api/users/privacy — persists privacy toggle settings to database
+  - Updated PUT /api/users/[id] — added username to allowed fields with uniqueness check and regex validation
+  - Updated User type with showOnline, showLastSeen, showReadReceipts
+  - Updated auth.ts getAuthUser to include privacy fields in select
+  - ProfilePage: Made bio editing functional (saves via API), added avatar upload (file input → FormData → API), added formatLastSeen helper for relative timestamps, shows "Last seen Xm ago" when offline
+  - SettingsPanel: Added username field to edit-profile form, privacy switches now persist to API, initialized privacy state from user object, added debounced notification persistence stub
+  - Sign-in form: Added privacy fields to demo user object
+
+Stage Summary:
+- Files modified: page.tsx, settings-panel.tsx, profile-page.tsx, auth.ts, users/[id]/route.ts, types/index.ts, schema.prisma, sign-in-form.tsx
+- Files created: api/users/avatar/route.ts, api/users/privacy/route.ts
+- ESLint: 0 errors
+- TypeScript: 0 errors
+- Agent Browser verified: mobile layout (Friends/Profile/Chat tabs), desktop layout (sidebar + content), Settings sheet (edit-profile with username, privacy toggles), Notifications sheet, console clean
+

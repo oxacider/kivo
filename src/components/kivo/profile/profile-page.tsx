@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
   Edit3,
@@ -19,10 +19,13 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
+import { api } from '@/lib/api';
+import type { User } from '@/types';
 import { useTheme } from 'next-themes';
 import { useUIStore } from '@/stores/ui-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { useFriendsStore } from '@/stores/friends-store';
+import { useChatStore } from '@/stores/chat-store';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Switch } from '@/components/ui/switch';
 import Image from 'next/image';
@@ -36,6 +39,24 @@ const fadeUp = {
   animate: { opacity: 1, y: 0 },
 };
 
+function formatLastSeen(date: string): string {
+  try {
+    const d = new Date(date);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 1) return 'just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return format(d, 'MMM d, yyyy');
+  } catch {
+    return 'Unknown';
+  }
+}
+
 export function ProfilePage() {
   const { user, token, logout } = useAuthStore();
   const { friends } = useFriendsStore();
@@ -44,6 +65,7 @@ export function ProfilePage() {
 
   const [isEditing, setIsEditing] = useState(false);
   const [editBio, setEditBio] = useState(user?.bio ?? '');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isDemo = token?.startsWith('demo-');
 
@@ -56,9 +78,16 @@ export function ProfilePage() {
     }
   }, [user]);
 
-  const handleSaveBio = () => {
-    toast.info('Coming soon');
-    setIsEditing(false);
+  const handleSaveBio = async () => {
+    if (!user || isDemo) return;
+    try {
+      const updated = await api<User>('/users/' + user.id, { token, method: 'PUT', body: { bio: editBio } });
+      useAuthStore.getState().setUser(updated);
+      setIsEditing(false);
+      toast.success('Bio updated');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update bio');
+    }
   };
 
   const handleCancelEdit = () => {
@@ -67,11 +96,35 @@ export function ProfilePage() {
   };
 
   const handleEditProfile = () => {
-    toast.info('Coming soon');
+    setSettingsOpen(true);
   };
 
   const handleChangeAvatar = () => {
-    toast.info('Coming soon');
+    fileInputRef.current?.click();
+  };
+
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || isDemo) return;
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('Image must be under 2MB');
+      return;
+    }
+    try {
+      const formData = new FormData();
+      formData.append('avatar', file);
+      const res = await fetch('/api/users/avatar', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error);
+      useAuthStore.getState().updateUser({ avatar: json.data.avatar });
+      toast.success('Avatar updated');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to upload avatar');
+    }
   };
 
   const handleLogout = () => {
@@ -252,12 +305,9 @@ export function ProfilePage() {
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <span
-                className={`w-2.5 h-2.5 rounded-full ${
-                  user?.online ? 'bg-online' : 'bg-muted-foreground/40'
-                }`}
-              />\n              <p className="text-sm font-bold text-foreground">
-                {user?.online ? 'Online' : 'Offline'}
+              <span className={`w-2.5 h-2.5 rounded-full ${user?.online ? 'bg-online' : 'bg-muted-foreground/40'}`} />
+              <p className="text-sm font-bold text-foreground">
+                {user?.online ? 'Online' : user?.showLastSeen !== false ? `Last seen ${formatLastSeen(user?.lastSeen ?? '')}` : 'Offline'}
               </p>
             </div>
           </div>
@@ -331,6 +381,7 @@ export function ProfilePage() {
           </motion.button>
         </motion.div>
       </motion.div>
+      <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />
     </div>
   );
 }
