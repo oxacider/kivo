@@ -543,3 +543,24 @@ Stage Summary:
 - Back button handler wired (fixes QA M-01)
 - Notification permission declared (fixes Android 13+ requirement)
 - APK generation requires Android SDK with Gradle — exact commands provided to user
+
+---
+Task ID: 2
+Agent: Main
+Task: Final production readiness audit before beta APK release
+
+Work Log:
+- Audited all 8 configuration areas: env vars, Firebase/FCM, Prisma, Socket.IO, Capacitor, API URLs, CORS
+- Read every config file end-to-end: .env, firebase.ts, firebase-messaging-sw.js, fcm-send.ts, capacitor.ts, api.ts, socket.ts, capacitor.config.ts, Caddyfile, kivo-chat-service/index.ts, auth.ts, jwt.ts, db.ts, next.config.ts, prisma/schema.prisma
+- Traced full data flow: client → API routes → DB, client → Socket.IO → chat service → DB, client → FCM → server → FCM → device
+- Verified all missing configs degrade gracefully (no crashes)
+
+Findings:
+- RB-01 (FIXED): build:android script didn't create out/ dir (gitignored) and didn't require CAPACITOR_SERVER_URL — would produce broken APK on fresh clones
+- RB-02 (NOT CODE FIX): Service worker firebase-messaging-sw.js has hardcoded empty Firebase config. This is a static file that can't read NEXT_PUBLIC_* env vars. NOT APK-blocking (native push uses @capacitor/push-notifications directly). Would require build-time code generation or runtime fetch (both are new features). Flagged as deployment config requirement.
+- All other areas verified clean: API uses relative URLs (correct for both web and native), Socket.IO path:'/' matches all subpaths, CORS wildcard on chat service is appropriate behind reverse proxy, Prisma uses env-var DATABASE_URL (standard), JWT_SECRET validated at startup
+
+Stage Summary:
+- 1 code fix applied: build:android script now requires CAPACITOR_SERVER_URL and creates out/ directory
+- 0 remaining code-level release blockers
+- 6 deployment configuration items documented (see audit report)
