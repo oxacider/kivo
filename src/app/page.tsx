@@ -41,6 +41,7 @@ const pageVariants = {
 export default function Home() {
   const { currentView, splashDone, setSplashDone, setView } = useUIStore();
   const { user, token, setUser, setToken, logout } = useAuthStore();
+  const { setActiveConversationId } = useChatStore();
 
   // Fix hydration mismatch: splashDone persisted but currentView reset to 'splash'
   useEffect(() => {
@@ -48,6 +49,18 @@ export default function Home() {
       setView(user && token ? 'chat' : 'welcome');
     }
   }, [splashDone, currentView, user, token, setView]);
+
+  // Handle notification click: ?chat=conversationId from SW click handler
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const chatId = params.get('chat');
+    if (chatId && user && token) {
+      setActiveConversationId(chatId);
+      // Clean URL without reload
+      window.history.replaceState({}, '', '/');
+    }
+  }, [user, token, setActiveConversationId]);
 
   useEffect(() => {
     if (user && token && currentView !== 'splash') {

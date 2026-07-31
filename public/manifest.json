@@ -4,13 +4,15 @@
   "description": "Premium Messaging",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f5f3ff",
-  "theme_color": "#7c3aed",
+  "background_color": "f5f3ff",
+  "theme_color": "7c3aed",
+  "orientation": "portrait",
   "icons": [
     {
       "src": "/logo.png",
       "sizes": "any",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     }
   ]
 }

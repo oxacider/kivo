@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
+import { FirebaseProvider } from "@/components/firebase-provider";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -53,13 +54,15 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange={false}
         >
-          {children}
-          <Toaster
-            position="top-center"
-            toastOptions={{
-              className: "bg-surface-2 text-foreground border-border",
-            }}
-          />
+          <FirebaseProvider>
+            {children}
+            <Toaster
+              position="top-center"
+              toastOptions={{
+                className: "bg-surface-2 text-foreground border-border",
+              }}
+            />
+          </FirebaseProvider>
         </ThemeProvider>
       </body>
     </html>

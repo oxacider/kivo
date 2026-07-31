@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { useAuthStore } from '@/stores/auth-store';
+import { useAuthStore, triggerNotifications } from '@/stores/auth-store';
 import { useUIStore } from '@/stores/ui-store';
 import { api } from '@/lib/api';
 import { ArrowLeft, Loader2 } from 'lucide-react';
@@ -32,6 +32,7 @@ export function SignUpForm() {
       setToken(data.token);
       setView('chat');
       toast.success('Account created!');
+      triggerNotifications();
     } catch (err: any) {
       toast.error(err.message || 'Sign up failed');
     } finally {

@@ -29,6 +29,7 @@ model User {
   blockedUsers    Block[]       @relation("BlockedUsers")
   conversation1   Conversation[] @relation("User1")
   conversation2   Conversation[] @relation("User2")
+  fcmTokens       FCMToken[]
 }
 
 model Friendship {
@@ -91,4 +92,17 @@ model Message {
 
   @@index([conversationId])
   @@index([senderId])
+}
+
+model FCMToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String
+  device    String   @default("web")
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, token])
+  @@index([token])
 }
