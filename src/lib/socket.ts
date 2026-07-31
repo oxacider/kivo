@@ -1,10 +1,11 @@
 import { io, type Socket } from 'socket.io-client';
+import { SOCKET_URL } from '@/lib/capacitor';
 
 let socket: Socket | null = null;
 
 export function getSocket(): Socket {
   if (!socket) {
-    socket = io('/?XTransformPort=3003', {
+    socket = io(SOCKET_URL, {
       autoConnect: false,
       reconnection: true,
       reconnectionAttempts: 10,

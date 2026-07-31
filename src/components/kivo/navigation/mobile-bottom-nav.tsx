@@ -3,6 +3,8 @@
 import { motion } from 'framer-motion';
 import { MessageSquare, Users, User } from 'lucide-react';
 import { useUIStore, type MainTab } from '@/stores/ui-store';
+import { useCapacitor } from '@/hooks/use-capacitor';
+import { hapticLight } from '@/lib/capacitor';
 
 function getInitials(name: string) {
   return name.slice(0, 2).toUpperCase();
@@ -22,16 +24,22 @@ const tabs: TabItem[] = [
 
 export function MobileBottomNav() {
   const { mainTab, setMainTab } = useUIStore();
+  const { isNative } = useCapacitor();
+
+  const handleTabPress = (tab: MainTab) => {
+    setMainTab(tab);
+    if (isNative) hapticLight();
+  };
 
   return (
-    <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-border/20 bg-surface-1/90 backdrop-blur-xl">
+    <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-border/20 bg-surface-1/90 backdrop-blur-xl safe-bottom">
       <div className="relative flex items-center justify-around h-16 px-2">
         {tabs.map((tab) => {
           const isActive = mainTab === tab.id;
           return (
             <motion.button
               key={tab.id}
-              onClick={() => setMainTab(tab.id)}
+              onClick={() => handleTabPress(tab.id)}
               className={`relative flex flex-col items-center justify-center w-20 h-full gap-0.5 transition-colors ${
                 isActive ? 'text-primary' : 'text-muted-foreground'
               }`}

@@ -7,13 +7,16 @@ import { useAuthStore } from '@/stores/auth-store';
 import { useChatStore } from '@/stores/chat-store';
 import { useUIStore } from '@/stores/ui-store';
 import type { KIVONotificationData } from '@/lib/notifications';
+import { isNative } from '@/lib/capacitor';
 
 /* ------------------------------------------------------------------ */
-/*  Service Worker Registration                                       */
+/*  Service Worker Registration (web only)                             */
 /* ------------------------------------------------------------------ */
 
 function registerServiceWorker() {
   if (typeof window === 'undefined') return;
+  // Native platforms use FCM via native plugin, not Service Workers
+  if (isNative) return;
   if (!('serviceWorker' in navigator)) return;
 
   navigator.serviceWorker
@@ -41,8 +44,8 @@ function handleForegroundMessage(payload: MessagePayload) {
   const title = notification?.title || 'KIVO';
   const body = notification?.body || 'You have a new message';
 
-  // Use the Browser Notification API for foreground messages
-  if ('Notification' in window && Notification.permission === 'granted') {
+  // Use the Browser Notification API for foreground messages (web only)
+  if (!isNative && 'Notification' in window && Notification.permission === 'granted') {
     const n = new Notification(title, {
       body,
       icon: '/logo.png',
@@ -73,7 +76,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
   const listenerRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    // Always register the service worker (needed for background notifications)
+    // Register service worker only on web
     registerServiceWorker();
 
     return () => {
@@ -84,10 +87,9 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Set up foreground message listener when user is logged in
+  // Set up foreground message listener when user is logged in (web only)
   useEffect(() => {
-    if (!isLoggedIn) {
-      // Clean up listener on logout
+    if (!isLoggedIn || isNative) {
       if (listenerRef.current) {
         listenerRef.current();
         listenerRef.current = null;

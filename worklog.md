@@ -441,3 +441,39 @@ Stage Summary:
 - ESLint: 0 errors, 0 warnings
 - Dev server: compiles and serves 200 successfully
 - All existing features intact: optimistic sending, socket realtime, reactions, delivery/read status, image attachments, typing indicator, offline queue
+
+---
+Task ID: capacitor-android-prep
+Agent: main
+Task: Prepare KIVO for Capacitor Android conversion without changing existing architecture
+
+Work Log:
+- Installed Capacitor packages: @capacitor/core@8, @capacitor/android@8, @capacitor/cli@8 (dev), @capacitor/network@8, @capacitor/haptics@8, @capacitor/status-bar@8, @capacitor/keyboard@8, @capacitor/splash-screen@8
+- Created capacitor.config.ts: appId=com.kivo.messenger, server.url from env, androidScheme=https, SplashScreen/StatusBar/Keyboard plugin config, allowMixedContent for Android
+- Created src/lib/capacitor.ts: centralized platform detection (isNative/isAndroid/isIOS/isWeb), plugin wrappers (haptics with 6 styles, StatusBar setStyle, Keyboard hide/show, SplashScreen hide, Network getStatus), SOCKET_URL configurable via NEXT_PUBLIC_SOCKET_URL
+- Created src/hooks/use-capacitor.ts: useMemo-based platform hook (isNative, isAndroid, isIOS, isWeb, platform)
+- Created src/hooks/use-network-status.ts: native uses @capacitor/network listener, web uses navigator.onLine + online/offline events; useIsOnline() for guard checks
+- Created src/hooks/use-safe-area.ts: useSyncExternalStore pattern (avoids lint set-state-in-effect), reads CSS env(safe-area-inset-*) and applies as --kivo-safe-* CSS vars, listens to resize/orientation changes on native
+- Created src/hooks/use-haptics.ts: React hook wrapping 6 haptic styles + isNative flag
+- Created src/components/capacitor/safe-area-bootstrapper.tsx: invisible component that bootstraps safe area CSS vars, sets data-kivo-platform attribute on body for CSS scoping, syncs native StatusBar with next-themes resolvedTheme, hides native splash on mount
+- Updated src/app/layout.tsx: added viewport-fit=cover to Viewport, added format-detection and mobile-web-app-capable meta tags, wrapped SafeAreaBootstrapper inside ErrorBoundary+ThemeProvider
+- Updated src/app/globals.css: added Capacitor/Native overrides (overscroll-behavior-y: contain, -webkit-tap-highlight-color, native-scoped body scroll lock, -webkit-overflow-scrolling: touch, kivo-no-select), added 7 safe-area utility classes (safe-top/bottom/left/right/x/y/all, keyboard-bottom)
+- Updated src/lib/api.ts: added configurable API_BASE via NEXT_PUBLIC_API_BASE_URL (empty by default — relative URLs work in both web and Capacitor WebView), added apiUpload() helper for FormData requests
+- Updated src/lib/socket.ts: replaced hardcoded '/?XTransformPort=3003' with SOCKET_URL from capacitor.ts (web: XTransformPort gateway, native: '/socket.io' or NEXT_PUBLIC_SOCKET_URL env)
+- Updated src/components/firebase-provider.tsx: guards service worker registration with isNative check, skips onMessage listener on native (native uses FCM plugin), guards Browser Notification API with isNative
+- Updated src/lib/notifications.ts: requestNotificationPermission no-op on native, getFCMToken/generateFCMToken return null on native, deleteFCMRegistration no-op on native, enableNotifications passes device='android' on native
+- Updated src/components/kivo/navigation/mobile-bottom-nav.tsx: added safe-bottom utility class to nav for gesture navigation bar inset, added haptic feedback on tab press via useCapacitor+useHaptics
+- Updated src/components/kivo/splash-screen.tsx: on native, renders empty div and fires onDone after 100ms (native splash covers), calls hideSplash on unmount; web behavior completely unchanged
+- Updated package.json: added 4 Capacitor scripts (build:android, cap:sync, cap:open:android, cap:add:android)
+- Fixed 3 TypeScript errors: Keyboard resize type cast, mobileWebAppCapable not in Viewport type, Network.addListener returns Promise
+- Refactored useSafeArea from useState+useEffect to useSyncExternalStore to satisfy react-hooks/set-state-in-effect lint rule
+
+Stage Summary:
+- Files created (8): capacitor.config.ts, src/lib/capacitor.ts, src/hooks/use-capacitor.ts, src/hooks/use-network-status.ts, src/hooks/use-safe-area.ts, src/hooks/use-haptics.ts, src/components/capacitor/safe-area-bootstrapper.tsx
+- Files modified (9): package.json, src/app/layout.tsx, src/app/globals.css, src/lib/api.ts, src/lib/socket.ts, src/components/firebase-provider.tsx, src/lib/notifications.ts, src/components/kivo/navigation/mobile-bottom-nav.tsx, src/components/kivo/splash-screen.tsx
+- Architecture: unchanged — same Next.js standalone output, same API routes, same Socket.IO events, same Zustand stores, same component structure
+- TypeScript: 0 errors
+- ESLint: 0 errors, 0 warnings
+- Dev server: HTTP 200, zero console errors in browser
+- Agent Browser verified: splash screen renders correctly
+- Conversion path: bun run build:android → cap:open:android → build APK

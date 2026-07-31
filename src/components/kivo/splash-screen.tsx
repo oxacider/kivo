@@ -3,17 +3,40 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
+import { isNative } from '@/lib/capacitor';
+import { hideSplash } from '@/lib/capacitor';
 
 export function SplashScreen({ onDone }: { onDone: () => void }) {
   const [phase, setPhase] = useState(0);
 
+  // On native, the Capacitor SplashScreen is shown by the native layer.
+  // We skip the web splash animation and immediately proceed.
   useEffect(() => {
+    if (isNative) {
+      // Small delay to let the WebView finish loading
+      const timer = setTimeout(() => onDone(), 100);
+      return () => clearTimeout(timer);
+    }
+
     const t1 = setTimeout(() => setPhase(1), 400);
     const t2 = setTimeout(() => setPhase(2), 1200);
     const t3 = setTimeout(() => setPhase(3), 2200);
     const t4 = setTimeout(() => onDone(), 3000);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
   }, [onDone]);
+
+  // On native, hide the native splash when our web splash finishes
+  useEffect(() => {
+    if (!isNative) return;
+    // The bootstrapper handles hideSplash, but we ensure it here too
+    return () => { hideSplash(); };
+  }, []);
+
+  if (isNative) {
+    // Render nothing on native — the native splash covers this.
+    // The onDone callback fires after a small delay above.
+    return <div className="fixed inset-0 z-50 bg-background" />;
+  }
 
   return (
     <AnimatePresence>
