@@ -380,3 +380,40 @@ Stage Summary:
 - Dev server: running on port 3000 (HTTP 200)
 - Socket service: running on port 3003
 - All existing systems (Firebase, Auth, Socket, Friends, Profile) untouched
+
+---
+Task ID: phase4-pagination
+Agent: main
+Task: Production-grade cursor-based message pagination
+
+Work Log:
+- Audited current implementation: API had `?before=` cursor but loaded 50 messages with no metadata; store had no prepend/dedup for older messages; scroll handler only tracked bottom position
+- Updated messages API (`/api/conversations/[id]/messages`):
+  - Changed `take: 50` to `take: 31` (fetch N+1 to determine hasMore, return only N=30)
+  - Response shape changed from `Message[]` to `{ messages: Message[], hasMore: boolean }`
+  - PAGE_SIZE constant = 30
+- Updated chat-store:
+  - Added `hasMoreMessages: boolean` and `isLoadingMoreMessages: boolean` to state
+  - Added `prependMessages(messages)`: inserts older messages at front with ID-based deduplication
+  - Added `setLoadingMoreMessages(loading)` and `setHasMoreMessages(hasMore)` setters
+  - All existing actions (addMessage, updateMessage, removeMessage, addReaction, etc.) unchanged
+- Updated conversation-view.tsx:
+  - Initial load: fetches latest 30 messages, stores `hasMore` flag
+  - Scroll handler: detects `scrollTop < 120px` to trigger load-more
+  - Load-more flow: `loadMoreTriggeredRef` → `loadMoreTick` state → effect reads first message's createdAt as cursor
+  - Scroll position preservation: saves `scrollHeight` before fetch, restores `scrollTop = newHeight - oldHeight` via `requestAnimationFrame`
+  - Uses `useChatStore.getState().messages[0]` inside effect to avoid stale closure on `messages` array
+  - Loading indicator: `Loader2` spinner + "Loading older messages..." text at top of messages area
+  - "Start of conversation" indicator: shown when `!hasMoreMessages && messages.length > 0`
+  - Guard against loading while optimistic (temp-) message is first in list
+  - Guard against concurrent loads (`isLoadingMoreMessages` check in scroll handler)
+- All existing features verified intact: optimistic sending, socket realtime, reactions, delivery/read status, image attachments, typing indicator
+
+Stage Summary:
+- Files modified: src/app/api/conversations/[id]/messages/route.ts, src/stores/chat-store.ts, src/components/kivo/chat/conversation-view.tsx
+- 3 files modified, 0 new files
+- TypeScript: 0 errors
+- ESLint: 0 errors, 0 warnings
+- Production build: compiled successfully
+- Dev server: HTTP 200
+- Pagination: 30 messages per page, cursor-based, auto-load on scroll-up, scroll position preserved, duplicate prevention via ID Set

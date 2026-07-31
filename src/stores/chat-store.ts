@@ -11,6 +11,8 @@ interface ChatState {
   messages: Message[];
   typingUsers: TypingUserData[];
   isLoadingMessages: boolean;
+  isLoadingMoreMessages: boolean;
+  hasMoreMessages: boolean;
   isLoadingConversations: boolean;
   searchQuery: string;
   setConversations: (conversations: Conversation[]) => void;
@@ -18,6 +20,7 @@ interface ChatState {
   updateConversation: (id: string, data: Partial<Conversation>) => void;
   setActiveConversationId: (id: string | null) => void;
   setMessages: (messages: Message[]) => void;
+  prependMessages: (messages: Message[]) => void;
   addMessage: (message: Message) => void;
   updateMessage: (id: string, data: Partial<Message>) => void;
   removeMessage: (id: string) => void;
@@ -25,6 +28,8 @@ interface ChatState {
   setTyping: (userId: string, conversationId: string, isTyping: boolean, user?: { id: string; displayName: string; avatar: string } | null) => void;
   clearTypingForConversation: (conversationId: string) => void;
   setLoadingMessages: (loading: boolean) => void;
+  setLoadingMoreMessages: (loading: boolean) => void;
+  setHasMoreMessages: (hasMore: boolean) => void;
   setLoadingConversations: (loading: boolean) => void;
   setSearchQuery: (query: string) => void;
   incrementUnread: (conversationId: string) => void;
@@ -41,6 +46,8 @@ const initialState = {
   messages: [] as Message[],
   typingUsers: [] as TypingUserData[],
   isLoadingMessages: false,
+  isLoadingMoreMessages: false,
+  hasMoreMessages: false,
   isLoadingConversations: false,
   searchQuery: '',
 };
@@ -60,6 +67,13 @@ export const useChatStore = create<ChatState>()((set) => ({
     })),
   setActiveConversationId: (id) => set({ activeConversationId: id }),
   setMessages: (messages) => set({ messages }),
+  prependMessages: (newMessages) =>
+    set((state) => {
+      const existingIds = new Set(state.messages.map((m) => m.id));
+      const unique = newMessages.filter((m) => !existingIds.has(m.id));
+      if (unique.length === 0) return state;
+      return { messages: [...unique, ...state.messages] };
+    }),
   addMessage: (message) =>
     set((state) => {
       const exists = state.messages.find((m) => m.id === message.id);
@@ -92,6 +106,8 @@ export const useChatStore = create<ChatState>()((set) => ({
       ),
     })),
   setLoadingMessages: (isLoadingMessages) => set({ isLoadingMessages }),
+  setLoadingMoreMessages: (isLoadingMoreMessages) => set({ isLoadingMoreMessages }),
+  setHasMoreMessages: (hasMoreMessages) => set({ hasMoreMessages }),
   setLoadingConversations: (isLoadingConversations) =>
     set({ isLoadingConversations }),
   setSearchQuery: (searchQuery) => set({ searchQuery }),

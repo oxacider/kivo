@@ -255,7 +255,7 @@ function UploadProgressBar({ progress }: { progress: number }) {
 }
 
 export function ConversationView() {
-  const { activeConversationId, conversations, messages, setMessages, addMessage, updateMessage, removeMessage, typingUsers, setActiveConversationId, updateConversation, addReaction, removeReaction, setMessageStatus } = useChatStore();
+  const { activeConversationId, conversations, messages, setMessages, prependMessages, addMessage, updateMessage, removeMessage, typingUsers, setActiveConversationId, updateConversation, addReaction, removeReaction, setMessageStatus, hasMoreMessages, isLoadingMoreMessages, setLoadingMoreMessages, setHasMoreMessages } = useChatStore();
   const { user, token } = useAuthStore();
   const [input, setInput] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
@@ -286,13 +286,58 @@ export function ConversationView() {
     ? activeTypingUsers[0]
     : null;
 
-  // Track scroll position
+  // Track scroll position + trigger pagination
+  const loadMoreTriggeredRef = useRef(false);
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     setWasAtBottom(atBottom);
-  }, []);
+    // Trigger load-more when near top
+    if (el.scrollTop < 120 && hasMoreMessages && !isLoadingMoreMessages && !loadMoreTriggeredRef.current) {
+      loadMoreTriggeredRef.current = true;
+    }
+  }, [hasMoreMessages, isLoadingMoreMessages]);
+
+  // Load older messages when near top
+  const [loadMoreTick, setLoadMoreTick] = useState(0);
+  useEffect(() => {
+    if (!loadMoreTriggeredRef.current) return;
+    setLoadMoreTick((t) => t + 1);
+  }, [hasMoreMessages, isLoadingMoreMessages]);
+
+  useEffect(() => {
+    if (!activeConversationId || !token || !hasMoreMessages || isLoadingMoreMessages) return;
+    const convId = activeConversationId;
+    const tok = token;
+    const firstMsg = useChatStore.getState().messages[0];
+    if (!firstMsg || firstMsg.id.startsWith('temp-')) return;
+    const prevHeight = scrollRef.current?.scrollHeight ?? 0;
+    let cancelled = false;
+    setLoadingMoreMessages(true);
+    loadMoreTriggeredRef.current = false;
+    (async () => {
+      try {
+        const result = await api<{ messages: Message[]; hasMore: boolean }>(
+          '/conversations/' + convId + '/messages?before=' + encodeURIComponent(firstMsg.createdAt),
+          { token: tok }
+        );
+        if (!cancelled) {
+          prependMessages(result.messages);
+          setHasMoreMessages(result.hasMore);
+          requestAnimationFrame(() => {
+            const el = scrollRef.current;
+            if (el) el.scrollTop = el.scrollHeight - prevHeight;
+          });
+        }
+      } catch (err: any) {
+        if (!cancelled) toast.error(err.message);
+      } finally {
+        if (!cancelled) setLoadingMoreMessages(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [loadMoreTick, activeConversationId, token]);
 
   // Socket listeners for delivered, read, reactions, and optimistic message replacement
   useEffect(() => {
@@ -356,7 +401,7 @@ export function ConversationView() {
     };
   }, [token, activeConversationId, user?.id, updateMessage, removeMessage, addReaction, removeReaction]);
 
-  // Load messages when conversation changes
+  // Load latest 30 messages when conversation changes
   useEffect(() => {
     if (!activeConversationId || !token) return;
     const isDemo = token.startsWith('demo-');
@@ -364,8 +409,14 @@ export function ConversationView() {
     let cancelled = false;
     (async () => {
       try {
-        const msgs = await api<Message[]>('/conversations/' + activeConversationId + '/messages', { token });
-        if (!cancelled) setMessages(msgs);
+        const result = await api<{ messages: Message[]; hasMore: boolean }>(
+          '/conversations/' + activeConversationId + '/messages',
+          { token }
+        );
+        if (!cancelled) {
+          setMessages(result.messages);
+          setHasMoreMessages(result.hasMore);
+        }
       } catch (err: any) { if (!cancelled) toast.error(err.message); }
     })();
     return () => { cancelled = true; };
@@ -790,6 +841,23 @@ export function ConversationView() {
       {/* ========== MESSAGES AREA ========== */}
       <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-2xl px-4 py-4">
+          {/* Loading older messages indicator */}
+          {isLoadingMoreMessages && (
+            <div className="mb-4 flex items-center justify-center gap-2 py-2">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              <span className="text-[11px] text-muted-foreground">Loading older messages...</span>
+            </div>
+          )}
+
+          {/* Start of chat indicator */}
+          {!hasMoreMessages && messages.length > 0 && (
+            <div className="mb-4 flex items-center justify-center">
+              <span className="rounded-full bg-surface-2 px-3 py-1 text-[10px] text-muted-foreground/60">
+                Start of conversation
+              </span>
+            </div>
+          )}
+
           {/* Date divider */}
           {messages.length > 0 && (
             <div className="mb-4 flex items-center justify-center">

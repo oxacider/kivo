@@ -1,6 +1,8 @@
 import { db } from '@/lib/db';
 import { getAuthUser, errorResponse } from '@/lib/auth';
 
+const PAGE_SIZE = 30;
+
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const user = await getAuthUser(request);
@@ -21,7 +23,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       where.createdAt = { lt: new Date(before) };
     }
 
-    const messages = await db.message.findMany({
+    // Fetch PAGE_SIZE + 1 to determine if more pages exist
+    const fetched = await db.message.findMany({
       where,
       include: {
         sender: { select: { id: true, displayName: true, username: true, avatar: true } },
@@ -34,15 +37,19 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
         attachments: true,
       },
       orderBy: { createdAt: 'asc' },
-      take: 50,
+      take: PAGE_SIZE + 1,
     });
 
+    const hasMore = fetched.length > PAGE_SIZE;
+    const messages = hasMore ? fetched.slice(0, PAGE_SIZE) : fetched;
+
+    // Auto-deliver messages on fetch
     await db.message.updateMany({
       where: { conversationId: id, senderId: { not: user.id }, status: 'sent', deleted: false },
       data: { status: 'delivered' },
     });
 
-    return Response.json({ success: true, data: messages });
+    return Response.json({ success: true, data: { messages, hasMore } });
   } catch (err) {
     console.error(err);
     return errorResponse('Failed to fetch messages', 500);
