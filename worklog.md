@@ -232,3 +232,68 @@ Stage Summary:
 - TypeScript: 0 errors
 - Agent Browser verified: mobile layout (Friends/Profile/Chat tabs), desktop layout (sidebar + content), Settings sheet (edit-profile with username, privacy toggles), Notifications sheet, console clean
 
+---
+Task ID: phase3-chat-upgrade
+Agent: main
+Task: Phase 3 — Chat Experience Upgrade to Commercial Messaging App Level
+
+Work Log:
+- Analyzed existing codebase: chat-store, conversation-view, conversation-list, socket service, types, CSS, API routes
+- Added Reaction model to Prisma schema (messageId, userId, emoji, unique constraint on messageId+userId+emoji)
+- Pushed schema to DB with `bun run db:push`
+- Updated TypeScript types: added Reaction interface, 'failed' and 'sending' to Message.status, 'video'|'file'|'voice' to Message.type, MediaAttachment interface
+- Upgraded socket service (kivo-chat-service/index.ts):
+  - message:send now includes reactions in response, auto-marks as 'delivered' if recipient online
+  - New event: message:delivered (emitted to sender when recipient is online)
+  - New event: message:failed (emitted on send error)
+  - New event: reaction:add (toggle reaction with upsert logic — removes existing reaction by same user, creates new)
+  - New event: reaction:update (broadcasts to both parties)
+  - New event: user:presence (request online/lastSeen of any user)
+  - Enhanced typing:start to include sender display info
+  - Enhanced user:offline to include lastSeen timestamp
+  - Added getMessageWithExtras helper for rich message includes
+- Upgraded chat-store:
+  - Added TypingUserData interface (extends TypingUser with optional user info)
+  - setTyping now accepts optional user data parameter
+  - Added addReaction(messageId, reaction) — adds or replaces reaction by same user
+  - Added removeReaction(messageId, userId, emoji)
+- Updated messages API route to include reactions in response (with user data)
+- Added 9 new CSS animations:
+  - kivo-msg-send (spring bounce up for sent messages)
+  - kivo-msg-receive (slide from left for received messages)
+  - kivo-status-pulse (pulsing dots for sending status)
+  - kivo-reaction-pop (spring pop for new reactions)
+  - kivo-reaction-burst (scale bounce for reaction interaction)
+  - kivo-shake (horizontal shake for failed messages)
+  - kivo-qr-slide (slide up for quick reaction bar)
+  - kivo-qr-fade (fade in for reaction bar)
+- Complete rewrite of conversation-view.tsx with all Phase 3 features:
+  - MessageStatus component: visual sent/delivered/read/failed/sending indicators with icons
+  - MessageReactions component: grouped reactions with count, active state highlighting, spring animations
+  - QuickReactionBar component: 6 quick-reaction emoji buttons (❤️👍😂😮😢🔥) with hover/tap scale animations
+  - ProfilePreview popover: shows avatar, name, username, online status, last seen, bio, custom status on header tap
+  - Premium typing indicator: user avatar + animated dots + "User is typing" label with name
+  - Optimistic message sending: shows 'sending' status immediately, replaces with real message on server confirmation
+  - Failed message handling: shake animation, red border, Retry button
+  - Delivered status: server auto-marks delivered when recipient is online, sender gets real-time update
+  - Read receipt updates: all sent/delivered/sending messages marked as 'read' when recipient reads
+  - Copy message action (new)
+  - Reaction system: click message to show quick reactions, tap to toggle, spring animations on add/remove
+  - Message send animation: different animations for sent (bounce up) vs received (slide from left)
+  - Smart scroll: only auto-scrolls when user is at bottom of chat
+  - Media input architecture prep: Image, Paperclip, Mic buttons in input bar (hidden on mobile)
+  - Chat header: last seen display ("Last seen 5m ago"), online status, profile preview on avatar click
+  - Enhanced typing dots: larger dots (6px), 5px bounce height, faster timing
+- Updated conversation-list.tsx:
+  - Added handlers for message:delivered, message:failed, reaction:update events
+  - Enhanced user:typing handler to pass user data
+ - TypeScript: 0 errors
+- ESLint: 0 errors
+- Dev server: compiles and serves 200 successfully
+
+Stage Summary:
+- Files modified: prisma/schema.prisma, src/types/index.ts, src/stores/chat-store.ts, src/app/globals.css, src/app/api/conversations/[id]/messages/route.ts, mini-services/kivo-chat-service/index.ts, src/components/kivo/chat/conversation-view.tsx, src/components/kivo/chat/conversation-list.tsx
+- 8 files modified, 0 new files created
+- All 7 Phase 3 requirements implemented: message status system, premium typing indicator, improved chat header, message actions (reply/copy/delete/forward/reactions), emoji reactions with animations, media input architecture prep
+- Existing Firebase architecture, security, TypeScript safety, and responsive design maintained
+

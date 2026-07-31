@@ -37,6 +37,7 @@ model User {
   conversation1   Conversation[] @relation("User1")
   conversation2   Conversation[] @relation("User2")
   fcmTokens       FCMToken[]
+  reactions       Reaction[] @relation("UserReactions")
 }
 
 model Friendship {
@@ -96,9 +97,24 @@ model Message {
   sender       User         @relation("UserMessages", fields: [senderId], references: [id], onDelete: Cascade)
   replyTo      Message?     @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
   replies      Message[]    @relation("MessageReplies")
+  reactions    Reaction[]    @relation("MessageReactions")
 
   @@index([conversationId])
   @@index([senderId])
+}
+
+model Reaction {
+  id          String   @id @default(cuid())
+  messageId   String
+  userId      String
+  emoji       String
+  createdAt   DateTime @default(now())
+
+  message Message @relation("MessageReactions", fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation("UserReactions", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
 }
 
 model FCMToken {

@@ -26,6 +26,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       include: {
         sender: { select: { id: true, displayName: true, username: true, avatar: true } },
         replyTo: { select: { id: true, content: true, senderId: true, sender: { select: { displayName: true } } } },
+        reactions: {
+          include: {
+            user: { select: { id: true, displayName: true, avatar: true } },
+          },
+        },
       },
       orderBy: { createdAt: 'asc' },
       take: 50,

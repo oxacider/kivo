@@ -17,13 +17,22 @@ export interface User {
   updatedAt: string;
 }
 
+export interface Reaction {
+  id: string;
+  messageId: string;
+  userId: string;
+  emoji: string;
+  createdAt: string;
+  user?: Pick<User, 'id' | 'displayName' | 'avatar'>;
+}
+
 export interface Message {
   id: string;
   conversationId: string;
   senderId: string;
   content: string;
-  type: 'text' | 'image' | 'system';
-  status: 'sent' | 'delivered' | 'read' | 'deleted';
+  type: 'text' | 'image' | 'video' | 'file' | 'voice' | 'system';
+  status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'deleted';
   replyToId: string | null;
   edited: boolean;
   deleted: boolean;
@@ -31,6 +40,7 @@ export interface Message {
   updatedAt: string;
   sender?: User;
   replyTo?: Message | null;
+  reactions?: Reaction[];
 }
 
 export interface Conversation {
@@ -77,4 +87,17 @@ export interface TypingUser {
 export interface OnlineUser {
   userId: string;
   socketId: string;
+}
+
+export interface MediaAttachment {
+  id: string;
+  type: 'image' | 'video' | 'file' | 'voice';
+  url: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  duration?: number;
+  width?: number;
+  height?: number;
+  thumbnailUrl?: string;
 }

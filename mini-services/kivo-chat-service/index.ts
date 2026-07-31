@@ -90,6 +90,21 @@ async function getSenderInfo(userId: string) {
   return user
 }
 
+function getMessageWithExtras(messageId: string) {
+  return db.message.findUnique({
+    where: { id: messageId },
+    include: {
+      sender: { select: { id: true, username: true, displayName: true, avatar: true } },
+      replyTo: { select: { id: true, content: true, senderId: true } },
+      reactions: {
+        include: {
+          user: { select: { id: true, displayName: true, avatar: true } },
+        },
+      },
+    },
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Socket authentication middleware
 // ---------------------------------------------------------------------------
@@ -170,13 +185,19 @@ io.on('connection', async (socket) => {
             content,
             type: type ?? 'text',
             replyToId: replyToId ?? null,
+            status: 'sent',
           },
           include: {
             sender: {
               select: { id: true, username: true, displayName: true, avatar: true },
             },
             replyTo: {
-              select: { id: true, content: true },
+              select: { id: true, content: true, senderId: true },
+            },
+            reactions: {
+              include: {
+                user: { select: { id: true, displayName: true, avatar: true } },
+              },
             },
           },
         })
@@ -186,10 +207,23 @@ io.on('connection', async (socket) => {
           data: { updatedAt: new Date() },
         })
 
-        emitToUser(otherId, 'message:new', message)
+        // Emit to sender as 'sent' confirmation
         socket.emit('message:new', message)
+
+        // Emit to recipient
+        emitToUser(otherId, 'message:new', message)
+
+        // If recipient is online, immediately mark as delivered
+        if (onlineUsers.has(otherId)) {
+          await db.message.update({
+            where: { id: message.id },
+            data: { status: 'delivered' },
+          })
+          socket.emit('message:delivered', { messageId: message.id, conversationId, status: 'delivered' })
+        }
       } catch (err) {
         console.error('[message:send] error', err)
+        socket.emit('message:failed', { conversationId, error: 'Failed to send message' })
       }
     },
   )
@@ -264,15 +298,58 @@ io.on('connection', async (socket) => {
         const conv = await getConversation(conversationId)
         if (!isParticipant(conv, userId)) return
 
-        await db.message.updateMany({
+        const result = await db.message.updateMany({
           where: { conversationId, senderId: { not: userId }, status: { not: 'read' } },
           data: { status: 'read' },
         })
 
         const otherId = getOtherUserId(conv, userId)
-        emitToUser(otherId, 'message:read', { conversationId, userId })
+        emitToUser(otherId, 'message:read', { conversationId, userId, count: result.count })
       } catch (err) {
         console.error('[message:read] error', err)
+      }
+    },
+  )
+
+  // -----------------------------------------------------------------------
+  // reaction:add
+  // -----------------------------------------------------------------------
+  socket.on(
+    'reaction:add',
+    async ({ messageId, emoji }: { messageId: string; emoji: string }) => {
+      try {
+        const msg = await db.message.findUnique({ where: { id: messageId } })
+        if (!msg) return
+
+        const conv = await getConversation(msg.conversationId)
+        if (!isParticipant(conv, userId)) return
+
+        // Upsert: toggle reaction
+        const existing = await db.reaction.findUnique({
+          where: { messageId_userId_emoji: { messageId, userId, emoji } },
+        })
+
+        let reactionData: any
+        if (existing) {
+          // Remove existing reaction (toggle off)
+          await db.reaction.delete({ where: { id: existing.id } })
+          reactionData = { messageId, userId, emoji, removed: true }
+        } else {
+          // Remove any other reaction by this user on this message first
+          await db.reaction.deleteMany({ where: { messageId, userId } })
+          // Create new reaction
+          const reaction = await db.reaction.create({
+            data: { messageId, userId, emoji },
+            include: { user: { select: { id: true, displayName: true, avatar: true } } },
+          })
+          reactionData = reaction
+        }
+
+        const otherId = getOtherUserId(conv, userId)
+        emitToUser(otherId, 'reaction:update', reactionData)
+        socket.emit('reaction:update', reactionData)
+      } catch (err) {
+        console.error('[reaction:add] error', err)
       }
     },
   )
@@ -286,7 +363,8 @@ io.on('connection', async (socket) => {
       const conv = await getConversation(conversationId)
       if (!isParticipant(conv, userId)) return
       const otherId = getOtherUserId(conv, userId)
-      emitToUser(otherId, 'user:typing', { conversationId, userId, isTyping: true })
+      const sender = await getSenderInfo(userId)
+      emitToUser(otherId, 'user:typing', { conversationId, userId, isTyping: true, user: sender })
     },
   )
 
@@ -316,6 +394,30 @@ io.on('connection', async (socket) => {
   )
 
   // -----------------------------------------------------------------------
+  // user:presence – get online status + last seen of a user
+  // -----------------------------------------------------------------------
+  socket.on(
+    'user:presence',
+    async ({ userId: targetUserId }: { userId: string }) => {
+      try {
+        const target = await db.user.findUnique({
+          where: { id: targetUserId },
+          select: { id: true, online: true, lastSeen: true, showOnline: true, showLastSeen: true },
+        })
+        if (target) {
+          socket.emit('user:presence:response', {
+            userId: target.id,
+            online: target.showOnline ? target.online : false,
+            lastSeen: target.showLastSeen ? target.lastSeen.toISOString() : null,
+          })
+        }
+      } catch (err) {
+        console.error('[user:presence] error', err)
+      }
+    },
+  )
+
+  // -----------------------------------------------------------------------
   // disconnect
   // -----------------------------------------------------------------------
   socket.on('disconnect', async () => {
@@ -331,7 +433,7 @@ io.on('connection', async (socket) => {
       console.error('[disconnect] failed to update user', err)
     }
 
-    io.emit('user:offline', { userId })
+    io.emit('user:offline', { userId, lastSeen: new Date().toISOString() })
     console.log(`[disconnect] ${userId} went offline (${onlineUsers.size} still online)`)
   })
 

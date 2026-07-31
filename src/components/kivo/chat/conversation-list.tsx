@@ -53,7 +53,7 @@ export function ConversationList() {
     conversations, activeConversationId, setActiveConversationId,
     searchQuery, setSearchQuery, setConversations,
     updateConversation, addMessage, updateMessage, removeMessage,
-    setTyping, clearTypingForConversation, clearUnread,
+    setTyping, clearTypingForConversation, clearUnread, addReaction, removeReaction,
   } = useChatStore();
   const { user, token } = useAuthStore();
   const { setSearchOpen, setNotificationsOpen, setMobileSidebarOpen } = useUIStore();
@@ -100,7 +100,25 @@ export function ConversationList() {
 
     socket.on('message:updated', (msg: any) => { updateMessage(msg.id, msg); });
     socket.on('message:deleted', (data: any) => { removeMessage(data.messageId); });
-    socket.on('user:typing', (data: any) => { setTyping(data.userId, data.conversationId, data.isTyping); });
+    socket.on('message:delivered', (data: any) => {
+      updateMessage(data.messageId, { status: 'delivered' });
+    });
+    socket.on('message:failed', (data: any) => {
+      // Find the optimistic sending message and mark as failed
+      const msgs = useChatStore.getState().messages;
+      const sending = msgs.find(m => m.status === 'sending' && m.conversationId === data.conversationId);
+      if (sending) {
+        updateMessage(sending.id, { status: 'failed' });
+      }
+    });
+    socket.on('reaction:update', (data: any) => {
+      if (data.removed) {
+        removeReaction(data.messageId, data.userId, data.emoji);
+      } else {
+        addReaction(data.messageId, data);
+      }
+    });
+    socket.on('user:typing', (data: any) => { setTyping(data.userId, data.conversationId, data.isTyping, data.user); });
     socket.on('message:read', (data: any) => { updateConversation(data.conversationId, { unreadCount: 0 } as Partial<Conversation>); });
 
     return () => { disconnectSocket(); };

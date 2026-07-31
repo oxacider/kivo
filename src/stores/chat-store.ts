@@ -1,11 +1,15 @@
 import { create } from 'zustand';
-import type { Message, Conversation, TypingUser } from '@/types';
+import type { Message, Conversation, TypingUser, Reaction } from '@/types';
+
+export interface TypingUserData extends TypingUser {
+  user?: { id: string; displayName: string; avatar: string } | null;
+}
 
 interface ChatState {
   conversations: Conversation[];
   activeConversationId: string | null;
   messages: Message[];
-  typingUsers: TypingUser[];
+  typingUsers: TypingUserData[];
   isLoadingMessages: boolean;
   isLoadingConversations: boolean;
   searchQuery: string;
@@ -17,14 +21,16 @@ interface ChatState {
   addMessage: (message: Message) => void;
   updateMessage: (id: string, data: Partial<Message>) => void;
   removeMessage: (id: string) => void;
-  setTypingUsers: (users: TypingUser[]) => void;
-  setTyping: (userId: string, conversationId: string, isTyping: boolean) => void;
+  setTypingUsers: (users: TypingUserData[]) => void;
+  setTyping: (userId: string, conversationId: string, isTyping: boolean, user?: { id: string; displayName: string; avatar: string } | null) => void;
   clearTypingForConversation: (conversationId: string) => void;
   setLoadingMessages: (loading: boolean) => void;
   setLoadingConversations: (loading: boolean) => void;
   setSearchQuery: (query: string) => void;
   incrementUnread: (conversationId: string) => void;
   clearUnread: (conversationId: string) => void;
+  addReaction: (messageId: string, reaction: Reaction) => void;
+  removeReaction: (messageId: string, userId: string, emoji: string) => void;
   reset: () => void;
 }
 
@@ -32,7 +38,7 @@ const initialState = {
   conversations: [] as Conversation[],
   activeConversationId: null as string | null,
   messages: [] as Message[],
-  typingUsers: [] as TypingUser[],
+  typingUsers: [] as TypingUserData[],
   isLoadingMessages: false,
   isLoadingConversations: false,
   searchQuery: '',
@@ -68,13 +74,13 @@ export const useChatStore = create<ChatState>()((set) => ({
       messages: state.messages.filter((m) => m.id !== id),
     })),
   setTypingUsers: (typingUsers) => set({ typingUsers }),
-  setTyping: (userId, conversationId, isTyping) =>
+  setTyping: (userId, conversationId, isTyping, user) =>
     set((state) => {
       const filtered = state.typingUsers.filter(
         (t) => !(t.userId === userId && t.conversationId === conversationId)
       );
       if (isTyping) {
-        return { typingUsers: [...filtered, { userId, conversationId, isTyping }] };
+        return { typingUsers: [...filtered, { userId, conversationId, isTyping, user }] };
       }
       return { typingUsers: filtered };
     }),
@@ -101,6 +107,29 @@ export const useChatStore = create<ChatState>()((set) => ({
       conversations: state.conversations.map((c) =>
         c.id === conversationId ? { ...c, unreadCount: 0 } : c
       ),
+    })),
+  addReaction: (messageId, reaction) =>
+    set((state) => ({
+      messages: state.messages.map((m) => {
+        if (m.id !== messageId) return m;
+        const reactions = [...(m.reactions || [])];
+        // Remove any existing reaction by this user
+        const filtered = reactions.filter((r) => r.userId !== reaction.userId);
+        filtered.push(reaction);
+        return { ...m, reactions: filtered };
+      }),
+    })),
+  removeReaction: (messageId, userId, emoji) =>
+    set((state) => ({
+      messages: state.messages.map((m) => {
+        if (m.id !== messageId) return m;
+        return {
+          ...m,
+          reactions: (m.reactions || []).filter(
+            (r) => !(r.userId === userId && r.emoji === emoji)
+          ),
+        };
+      }),
     })),
   reset: () => set(initialState),
 }));
