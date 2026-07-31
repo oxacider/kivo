@@ -517,3 +517,29 @@ Push flow:
 Environment variables needed for production FCM:
 - FCM_PROJECT_ID: Firebase project ID
 - FCM_SERVICE_ACCOUNT_B64 or FCM_SERVICE_ACCOUNT_PATH: Service account credentials
+
+---
+Task ID: 1
+Agent: Main
+Task: Android APK release preparation — verify and fix all build-blocking issues
+
+Work Log:
+- Audited capacitor.config.ts: found webDir 'out' missing, server.url using undefined env var, StatusBar style 'LIGHT' causing white-on-white flash on light background
+- Fixed capacitor.config.ts: conditional server object (only set when CAPACITOR_SERVER_URL is defined), StatusBar style changed to 'DARK', added production/dev flow documentation
+- Created minimal out/index.html with KIVO-branded loading spinner for cap sync
+- Installed @capacitor/app@8.1.1 (was missing — required for Android hardware back button)
+- Added onBackButton() and exitApp() wrappers to src/lib/capacitor.ts
+- Implemented 7-priority Android back button handler in SafeAreaBootstrapper: search → notifications → settings → activeConversation → auth screens → secondary tabs → exitApp
+- Fixed TS error: App imported from @capacitor/app not @capacitor/core
+- Ran `npx cap add android` — created android/ project with com.kivo.messenger package ID
+- Added POST_NOTIFICATIONS permission to AndroidManifest.xml (required for Android 13+ push)
+- Updated ic_launcher_background to #f5f3ff (KIVO brand color)
+- Ran `npx cap sync android` — all 7 plugins verified: app, haptics, keyboard, network, push-notifications, splash-screen, status-bar
+- Verified: tsc --noEmit clean, eslint clean, dev server 200 OK
+
+Stage Summary:
+- Android platform ready at android/ directory
+- All 7 Capacitor plugins synced and verified
+- Back button handler wired (fixes QA M-01)
+- Notification permission declared (fixes Android 13+ requirement)
+- APK generation requires Android SDK with Gradle — exact commands provided to user

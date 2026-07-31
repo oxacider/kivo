@@ -1,17 +1,32 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
+/**
+ * KIVO Capacitor Configuration
+ *
+ * Production APK flow:
+ *   1. Deploy the Next.js server (standalone output)
+ *   2. Set CAPACITOR_SERVER_URL=<https://your-kivo-server.com>
+ *   3. Run the build:android script (or manual steps below)
+ *   4. The WebView loads from server.url; local webDir is a fallback shell
+ *
+ * Development (live reload) flow:
+ *   1. Run `bun run dev` and note the LAN IP
+ *   2. CAPACITOR_SERVER_URL=http://<LAN_IP>:3000 npx cap run android -l
+ */
+
+const serverUrl = process.env.CAPACITOR_SERVER_URL;
+
 const config: CapacitorConfig = {
   appId: 'com.kivo.messenger',
   appName: 'KIVO',
   webDir: 'out',
-  server: {
-    // In production, point Capacitor WebView to your deployed KIVO server.
-    // All relative API/socket URLs in the web app resolve against this origin.
-    // For local development with Android emulator: use your machine's LAN IP.
-    url: process.env.CAPACITOR_SERVER_URL,
-    androidScheme: 'https',
-    cleartext: true,
-  },
+  server: serverUrl
+    ? {
+        url: serverUrl,
+        androidScheme: 'https',
+        cleartext: true,
+      }
+    : undefined,
   plugins: {
     SplashScreen: {
       launchShowDuration: 0,
@@ -20,8 +35,8 @@ const config: CapacitorConfig = {
       showSpinner: false,
     },
     StatusBar: {
-      style: 'LIGHT',
-      backgroundColor: '#7c3aed',
+      style: 'DARK',
+      backgroundColor: '#f5f3ff',
     },
     PushNotifications: {
       presentationOptions: ['badge', 'sound', 'alert'],

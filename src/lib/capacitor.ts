@@ -9,6 +9,7 @@
  */
 
 import { Capacitor } from '@capacitor/core';
+import { App as CapacitorApp } from '@capacitor/app';
 import { Network } from '@capacitor/network';
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
 import { StatusBar, Style } from '@capacitor/status-bar';
@@ -101,6 +102,28 @@ export async function showKeyboard() {
 export async function hideSplash() {
   if (!isNative) return;
   try { await SplashScreen.hide({ fadeOutDuration: 300 }); } catch { /* */ }
+}
+
+// -------------------------------------------------------------------
+//  App (back button, url open, etc.)
+// -------------------------------------------------------------------
+
+/** Register a listener for the Android hardware back button.
+ *  Returns a cleanup function. No-op on web. */
+export function onBackButton(fn: () => void): () => void {
+  if (!isNative) return () => {};
+  try {
+    const handler = CapacitorApp.addListener('backButton', fn);
+    return () => handler.then((h) => h.remove());
+  } catch {
+    return () => {};
+  }
+}
+
+/** Minimize the app (move to background). No-op on web. */
+export async function exitApp(): Promise<void> {
+  if (!isNative) return;
+  try { await CapacitorApp.exitApp(); } catch { /* */ }
 }
 
 // -------------------------------------------------------------------
