@@ -4,7 +4,7 @@ import { getAuthUser } from '@/lib/auth';
 
 /* ------------------------------------------------------------------ */
 /*  POST /api/notifications/token                                     */
-/*  Save (upsert) an FCM token for the authenticated user.            */
+/*  Register (upsert) a device push token for the authenticated user.  */
 /* ------------------------------------------------------------------ */
 
 export async function POST(request: NextRequest) {
@@ -13,36 +13,39 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  let body: { token?: string; device?: string };
+  let body: { token?: string; platform?: string };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const { token, device = 'web' } = body;
+  const { token, platform = 'web' } = body;
   if (!token || typeof token !== 'string') {
     return NextResponse.json({ error: 'Token is required' }, { status: 400 });
   }
+  if (!['web', 'android', 'ios'].includes(platform)) {
+    return NextResponse.json({ error: 'Invalid platform' }, { status: 400 });
+  }
 
   try {
-    // Upsert: create or update (keep existing if already saved)
-    await db.fCMToken.upsert({
+    // Upsert: update existing or create new
+    await db.deviceToken.upsert({
       where: { userId_token: { userId: user.id, token } },
-      update: { device },
-      create: { userId: user.id, token, device },
+      update: { platform },
+      create: { userId: user.id, token, platform },
     });
 
     return NextResponse.json({ success: true });
   } catch (err) {
-    console.error('[FCM] POST /notifications/token error:', err);
+    console.error('[DeviceToken] POST /notifications/token error:', err);
     return NextResponse.json({ error: 'Failed to save token' }, { status: 500 });
   }
 }
 
 /* ------------------------------------------------------------------ */
 /*  DELETE /api/notifications/token                                   */
-/*  Remove an FCM token for the authenticated user.                   */
+/*  Remove a specific device token.                                    */
 /* ------------------------------------------------------------------ */
 
 export async function DELETE(request: NextRequest) {
@@ -64,13 +67,13 @@ export async function DELETE(request: NextRequest) {
   }
 
   try {
-    await db.fCMToken.deleteMany({
+    await db.deviceToken.deleteMany({
       where: { userId: user.id, token },
     });
 
     return NextResponse.json({ success: true });
   } catch (err) {
-    console.error('[FCM] DELETE /notifications/token error:', err);
+    console.error('[DeviceToken] DELETE /notifications/token error:', err);
     return NextResponse.json({ error: 'Failed to remove token' }, { status: 500 });
   }
 }

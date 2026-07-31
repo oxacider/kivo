@@ -36,7 +36,7 @@ model User {
   blockedUsers    Block[]       @relation("BlockedUsers")
   conversation1   Conversation[] @relation("User1")
   conversation2   Conversation[] @relation("User2")
-  fcmTokens       FCMToken[]
+  deviceTokens    DeviceToken[]
   reactions       Reaction[] @relation("UserReactions")
 }
 
@@ -118,17 +118,19 @@ model Reaction {
   @@index([messageId])
 }
 
-model FCMToken {
+model DeviceToken {
   id        String   @id @default(cuid())
   userId    String
   token     String
-  device    String   @default("web")
+  platform  String   @default("web") // 'web' | 'android' | 'ios'
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, token])
   @@index([token])
+  @@index([userId])
 }
 
 model MediaAttachment {

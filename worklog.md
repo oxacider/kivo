@@ -477,3 +477,43 @@ Stage Summary:
 - Dev server: HTTP 200, zero console errors in browser
 - Agent Browser verified: splash screen renders correctly
 - Conversion path: bun run build:android → cap:open:android → build APK
+
+---
+Task ID: push-notification-system
+Agent: main
+Task: Implement production-ready push notification system with Android native support
+
+Work Log:
+- **Audit**: Read all notification-related files (firebase.ts, notifications.ts, firebase-provider.tsx, firebase-messaging-sw.js, /api/notifications/token, schema.prisma, socket service, auth-store, logout route)
+- **Schema**: Renamed FCMToken → DeviceToken, added `platform` field (web/android/ios), added `updatedAt`, added `@@index([userId])`; pushed with db:push
+- **Installed**: @capacitor/push-notifications@8, firebase-admin@14
+- **Created src/lib/fcm-send.ts**: Server-side FCM sender using firebase-admin with lazy async init, supports 3 credential sources (base64 env, file path, ADC), sendPushToUser (multicast to all user devices), sendPushToUsers (bulk), automatic invalid token cleanup (3 error codes), removeAllTokensForUser
+- **Updated src/app/api/notifications/token/route.ts**: Changed from fCMToken to deviceToken, changed `device` param to `platform` with validation (web/android/ios)
+- **Updated src/lib/notifications.ts**: Complete rewrite — web flow unchanged, native flow added: registerNativePush (permission request → register → token via listener), ensureNativeListeners (registration/token refresh/foreground tap/background tap), initPushSystem (early init for native), native tap handler navigates to conversation via Zustand stores
+- **Updated src/components/firebase-provider.tsx**: Added initPushSystem() call on mount, cleaned up unused hapticMedium import
+- **Updated mini-services/kivo-chat-service/index.ts**: Imported sendPushToUser + PushPayload, added else branch in message:send — when recipient offline, sends FCM push with title "KIVO", body "{senderName}: {preview}", data with conversationId/senderId/type
+- **Updated src/app/api/auth/logout/route.ts**: Added removeAllTokensForUser(user.id) call — removes ALL device tokens on logout
+- **Updated capacitor.config.ts**: Added PushNotifications plugin config with presentationOptions
+- Fixed 4 lint errors (require → dynamic import for firebase-admin and store modules)
+- Fixed 2 TS errors (admin namespace → import() type, smallIcon → icon in AndroidConfig)
+
+Stage Summary:
+- Files created (1): src/lib/fcm-send.ts
+- Files modified (7): prisma/schema.prisma, src/app/api/notifications/token/route.ts, src/lib/notifications.ts, src/components/firebase-provider.tsx, mini-services/kivo-chat-service/index.ts, src/app/api/auth/logout/route.ts, capacitor.config.ts
+- Database: FCMToken renamed to DeviceToken with platform + updatedAt
+- TypeScript: 0 errors
+- ESLint: 0 errors, 0 warnings
+- Production build: ✓ compiled successfully
+- Dev server: ✓ Ready, HTTP 200, zero console errors
+- Agent Browser: verified splash renders, no runtime errors
+- Architecture: untouched — auth, socket events, chat UI, friend system, message system all unchanged
+
+Push flow:
+1. Login → triggerNotifications() → enableNotifications() → native: request permission + register → token saved to DeviceToken
+2. Message sent → socket service checks onlineUsers → if recipient offline → sendPushToUser → firebase-admin multicast to all DeviceTokens
+3. Android notification received → tap → pushNotificationActionPerformed → setActiveConversationId + setView('chat')
+4. Logout → disableNotifications() (client) + removeAllTokensForUser (server) → all tokens removed
+
+Environment variables needed for production FCM:
+- FCM_PROJECT_ID: Firebase project ID
+- FCM_SERVICE_ACCOUNT_B64 or FCM_SERVICE_ACCOUNT_PATH: Service account credentials

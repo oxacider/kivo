@@ -5,9 +5,8 @@ import { onMessage, type MessagePayload } from 'firebase/messaging';
 import { getMessagingInstance } from '@/lib/firebase';
 import { useAuthStore } from '@/stores/auth-store';
 import { useChatStore } from '@/stores/chat-store';
-import { useUIStore } from '@/stores/ui-store';
-import type { KIVONotificationData } from '@/lib/notifications';
-import { isNative } from '@/lib/capacitor';
+import { isNative, hapticMedium } from '@/lib/capacitor';
+import { initPushSystem, type KIVONotificationData } from '@/lib/notifications';
 
 /* ------------------------------------------------------------------ */
 /*  Service Worker Registration (web only)                             */
@@ -15,7 +14,6 @@ import { isNative } from '@/lib/capacitor';
 
 function registerServiceWorker() {
   if (typeof window === 'undefined') return;
-  // Native platforms use FCM via native plugin, not Service Workers
   if (isNative) return;
   if (!('serviceWorker' in navigator)) return;
 
@@ -30,21 +28,19 @@ function registerServiceWorker() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Foreground Notification Handler                                   */
+/*  Foreground Notification Handler (web only)                        */
 /* ------------------------------------------------------------------ */
 
 function handleForegroundMessage(payload: MessagePayload) {
   const notification = payload.notification;
   const data = (payload.data || {}) as unknown as KIVONotificationData;
 
-  // Don't show notification if user is already viewing this conversation
   const activeId = useChatStore.getState().activeConversationId;
   if (activeId === data.conversationId) return;
 
   const title = notification?.title || 'KIVO';
   const body = notification?.body || 'You have a new message';
 
-  // Use the Browser Notification API for foreground messages (web only)
   if (!isNative && 'Notification' in window && Notification.permission === 'granted') {
     const n = new Notification(title, {
       body,
@@ -54,7 +50,6 @@ function handleForegroundMessage(payload: MessagePayload) {
       data,
     });
 
-    // Click → navigate to chat
     n.onclick = () => {
       window.focus();
       if (data.conversationId) {
@@ -76,8 +71,10 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
   const listenerRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    // Register service worker only on web
     registerServiceWorker();
+
+    // Initialize native push listeners (sets up registration/tap handlers)
+    initPushSystem();
 
     return () => {
       if (listenerRef.current) {

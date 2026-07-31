@@ -1,10 +1,10 @@
 import { getMessagingInstance, VAPID_KEY } from '@/lib/firebase';
 import { getToken, deleteToken as fbDeleteToken } from 'firebase/messaging';
 import { api } from '@/lib/api';
-import { isNative } from '@/lib/capacitor';
+import { isNative, isAndroid, isIOS } from '@/lib/capacitor';
 
 /* ------------------------------------------------------------------ */
-/*  Notification Payload Types (Cloud Functions-ready)                 */
+/*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
 export interface KIVONotificationData {
@@ -13,10 +13,6 @@ export interface KIVONotificationData {
   type: 'new_message' | 'friend_request' | 'system';
 }
 
-/**
- * Standard payload shape that Cloud Functions will send.
- * Both `notification` (for background) and `data` (for foreground + routing).
- */
 export interface KIVOPushPayload {
   notification: {
     title: string;
@@ -28,7 +24,7 @@ export interface KIVOPushPayload {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Permission (web only)                                             */
+/*  Permission                                                        */
 /* ------------------------------------------------------------------ */
 
 /** Request browser notification permission. No-op on native. */
@@ -39,7 +35,7 @@ export async function requestNotificationPermission(): Promise<NotificationPermi
 }
 
 /* ------------------------------------------------------------------ */
-/*  FCM Token (web only — native uses FCM plugin directly)            */
+/*  Web FCM Token                                                     */
 /* ------------------------------------------------------------------ */
 
 /** Get the current FCM registration token (does NOT create one). Web only. */
@@ -55,7 +51,7 @@ export async function getFCMToken(): Promise<string | null> {
 }
 
 /** Generate (or return cached) FCM token with VAPID key. Web only. */
-async function generateFCMToken(): Promise<string | null> {
+async function generateWebFCMToken(): Promise<string | null> {
   if (isNative) return null;
   const messaging = await getMessagingInstance();
   if (!messaging || !VAPID_KEY) return null;
@@ -68,18 +64,118 @@ async function generateFCMToken(): Promise<string | null> {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Native (Capacitor) Push Token                                     */
+/* ------------------------------------------------------------------ */
+
+let nativePushToken: string | null = null;
+let nativeListenersRegistered = false;
+
+/**
+ * Register for native push notifications via @capacitor/push-notifications.
+ * Returns the FCM token on success, null otherwise.
+ *
+ * Handles:
+ *  - Permission request
+ *  - Token registration
+ *  - Token refresh (automatic via listener)
+ *  - Notification tap routing
+ */
+async function registerNativePush(): Promise<string | null> {
+  if (!isNative) return null;
+
+  try {
+    const { PushNotifications } = await import('@capacitor/push-notifications');
+
+    // Request permission
+    const result = await PushNotifications.requestPermissions();
+    if (result.receive === 'denied') {
+      console.info('[KIVO Push] Permission denied');
+      return null;
+    }
+
+    // Register for push — Android gets token immediately,
+    // iOS may need an additional step
+    await PushNotifications.register();
+
+    // The token arrives via the 'registration' listener (set up below).
+    // Return whatever we have or null.
+    return nativePushToken;
+  } catch (err) {
+    console.warn('[KIVO Push] Registration failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Set up native push notification listeners.
+ * Only needs to be called once.
+ *
+ * Handles:
+ *  - registration: saves token to server
+ *  - registrationError: logs error
+ *  - pushNotificationReceived: foreground notification (optional handling)
+ *  - pushNotificationActionPerformed: notification tap → navigate to chat
+ */
+function ensureNativeListeners() {
+  if (!isNative || nativeListenersRegistered) return;
+  nativeListenersRegistered = true;
+
+  import('@capacitor/push-notifications').then(({ PushNotifications }) => {
+    // Token received from FCM
+    PushNotifications.addListener('registration', (token) => {
+      nativePushToken = token.value;
+      const platform = isAndroid ? 'android' : isIOS ? 'ios' : 'android';
+      console.info(`[KIVO Push] Token received (${platform}):`, token.value.slice(0, 20) + '...');
+      saveTokenToServer(token.value, platform).catch(() => {});
+    });
+
+    // Token registration error
+    PushNotifications.addListener('registrationError', (err) => {
+      console.error('[KIVO Push] Registration error:', err.error);
+    });
+
+    // Foreground notification received
+    PushNotifications.addListener('pushNotificationReceived', (notification) => {
+      console.info('[KIVO Push] Foreground notification:', notification.title);
+      // Optionally show in-app notification or update badge
+    });
+
+    // User tapped notification (app in background or foreground)
+    PushNotifications.addListener('pushNotificationActionPerformed', async (action) => {
+      const data = action.notification.data as Record<string, string> | undefined;
+      const conversationId = data?.conversationId;
+
+      if (conversationId) {
+        console.info('[KIVO Push] Tap → conversation:', conversationId);
+        // Navigate to the conversation using Zustand store
+        // Dynamic imports avoid circular dependency at module level
+        const { useChatStore } = await import('@/stores/chat-store');
+        const { useUIStore } = await import('@/stores/ui-store');
+        const { useAuthStore } = await import('@/stores/auth-store');
+
+        const { user, token } = useAuthStore.getState();
+        if (user && token) {
+          useChatStore.getState().setActiveConversationId(conversationId);
+          useUIStore.getState().setView('chat');
+        }
+      }
+    });
+  }).catch(() => {});
+}
+
+/* ------------------------------------------------------------------ */
 /*  Server-side Token CRUD                                             */
 /* ------------------------------------------------------------------ */
 
-/** Save FCM token to KIVO backend (idempotent — upserts). */
-async function saveTokenToServer(token: string, device: string): Promise<void> {
+/** Save device token to KIVO backend (idempotent — upserts). */
+async function saveTokenToServer(token: string, platform: string): Promise<void> {
   await api('/notifications/token', {
     method: 'POST',
-    body: { token, device },
+    body: { token, platform },
   });
 }
 
-/** Remove FCM token from KIVO backend. */
+/** Remove device token from KIVO backend. */
 async function removeTokenFromServer(token: string): Promise<void> {
   await api('/notifications/token', {
     method: 'DELETE',
@@ -107,55 +203,82 @@ async function deleteFCMRegistration(): Promise<void> {
  * Enable push notifications for the current user.
  *
  * - Web: requests browser permission → FCM token → save to server
- * - Native: FCM token is obtained by the native FCM plugin;
- *   this function saves it to the KIVO backend.
+ * - Native: requests OS permission → Capacitor registers → listener saves token
  *
  * Returns the token on success, null otherwise.
- * Designed to be fire-and-forget: never throws.
+ * Never throws.
  */
 export async function enableNotifications(): Promise<string | null> {
   try {
-    const device = isNative ? 'android' : 'web';
-
-    // Step 1: Permission (web only)
-    if (!isNative) {
-      const permission = await requestNotificationPermission();
-      if (permission !== 'granted') {
-        console.info('[KIVO FCM] Notification permission not granted:', permission);
+    if (isNative) {
+      // Set up native listeners first (for registration callback)
+      ensureNativeListeners();
+      const token = await registerNativePush();
+      if (!token) {
+        console.warn('[KIVO Push] Could not register for native push.');
         return null;
       }
+      console.info(`[KIVO Push] Token registered successfully.`);
+      return token;
     }
 
-    // Step 2: FCM token
-    const token = await generateFCMToken();
+    // Web flow
+    const permission = await requestNotificationPermission();
+    if (permission !== 'granted') {
+      console.info('[KIVO FCM] Notification permission not granted:', permission);
+      return null;
+    }
+
+    const token = await generateWebFCMToken();
     if (!token) {
       console.warn('[KIVO FCM] Could not generate FCM token.');
       return null;
     }
 
-    // Step 3: Save to server
-    await saveTokenToServer(token, device);
-    console.info(`[KIVO FCM] Token saved successfully (device: ${device}).`);
+    await saveTokenToServer(token, 'web');
+    console.info('[KIVO FCM] Token saved successfully (device: web).');
     return token;
   } catch (err) {
-    console.warn('[KIVO FCM] enableNotifications failed:', err);
+    console.warn('[KIVO] enableNotifications failed:', err);
     return null;
   }
 }
 
 /**
  * Disable push notifications: remove token from Firebase and KIVO backend.
- * Designed to be fire-and-forget: never throws.
+ * Never throws.
  */
 export async function disableNotifications(): Promise<void> {
   try {
-    const token = await getFCMToken();
-    if (token) {
-      await removeTokenFromServer(token);
+    if (isNative && nativePushToken) {
+      await removeTokenFromServer(nativePushToken);
+      nativePushToken = null;
+    } else {
+      const token = await getFCMToken();
+      if (token) {
+        await removeTokenFromServer(token);
+      }
+      await deleteFCMRegistration();
     }
-    await deleteFCMRegistration();
-    console.info('[KIVO FCM] Notifications disabled.');
+    console.info('[KIVO] Notifications disabled.');
   } catch (err) {
-    console.warn('[KIVO FCM] disableNotifications failed:', err);
+    console.warn('[KIVO] disableNotifications failed:', err);
   }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Init — call early in app lifecycle to set up native listeners     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Initialize push notification system.
+ * On native, this sets up the Capacitor push listeners so that
+ * when the OS delivers a token, it gets saved to the server.
+ * On web, this is a no-op (the service worker handles background pushes).
+ *
+ * Call once from the app root (SafeAreaBootstrapper or FirebaseProvider).
+ */
+export function initPushSystem() {
+  if (!isNative) return;
+  ensureNativeListeners();
 }

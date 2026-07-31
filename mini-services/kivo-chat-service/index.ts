@@ -2,6 +2,7 @@ import { createServer } from 'http'
 import { Server } from 'socket.io'
 import { db } from '../../src/lib/db'
 import * as jose from 'jose'
+import { sendPushToUser, type PushPayload } from '../../src/lib/fcm-send'
 
 // ---------------------------------------------------------------------------
 // JWT Verification (shared secret with main app)
@@ -240,6 +241,28 @@ io.on('connection', async (socket) => {
             data: { status: 'delivered' },
           })
           socket.emit('message:delivered', { messageId: message.id, conversationId, status: 'delivered' })
+        } else {
+          // Recipient is offline — send push notification
+          try {
+            const senderInfo = await getSenderInfo(userId)
+            const senderName = senderInfo?.displayName || senderInfo?.username || 'Someone'
+            const preview = message.type === 'image'
+              ? '📷 Photo'
+              : (message.content || '').slice(0, 100)
+
+            const pushPayload: PushPayload = {
+              title: 'KIVO',
+              body: `${senderName}: ${preview}`,
+              data: {
+                conversationId,
+                senderId: userId,
+                type: 'new_message',
+              },
+            }
+            await sendPushToUser(otherId, pushPayload)
+          } catch (err) {
+            console.error('[message:send] push notification failed', err)
+          }
         }
       } catch (err) {
         console.error('[message:send] error', err)
