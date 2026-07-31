@@ -1,5 +1,5 @@
 import { getAuthUser, invalidateToken, errorResponse } from '@/lib/auth';
-import { removeAllTokensForUser } from '@/lib/fcm-send';
+import { db } from '@/lib/db';
 
 export async function POST(request: Request) {
   const user = await getAuthUser(request);
@@ -12,16 +12,16 @@ export async function POST(request: Request) {
     invalidateToken(auth.slice(7));
   }
 
-  // Mark user offline and remove all device tokens (push logout)
-  const { db } = await import('@/lib/db');
   try {
     await db.user.update({
       where: { id: user.id },
       data: { online: false, lastSeen: new Date() },
     });
-    // Remove all push device tokens so no more notifications are sent
-    await removeAllTokensForUser(user.id);
   } catch {}
+
+  // Device token removal is handled client-side by disableNotifications(),
+  // which removes only the current device's token from the server.
+  // This preserves push for other active sessions (e.g. Android when logging out web).
 
   return Response.json({ success: true });
 }
