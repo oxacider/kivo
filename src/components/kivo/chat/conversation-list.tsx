@@ -139,7 +139,7 @@ export function ConversationList() {
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background">
       {/* ================================================================== */}
-      {/* HEADER — Greeting, Name, Bell, Avatar                            */
+      {/* HEADER — Greeting, Name, Bell, Avatar */}
       {/* ================================================================== */}
       <header className="shrink-0 px-5 pt-6 pb-2">
         <div className="flex items-center justify-between">
@@ -184,7 +184,7 @@ export function ConversationList() {
       </header>
 
       {/* ================================================================== */}
-      {/* SEARCH BAR                                                        */
+      {/* SEARCH BAR */}
       {/* ================================================================== */}
       <div className="shrink-0 px-5 mt-4">
         <div className="relative">
@@ -199,8 +199,8 @@ export function ConversationList() {
         </div>
       </div>
 
-      {/* ================================================================== */
-      {/* FILTER PILLS                                                      */
+      {/* ================================================================== */}
+      {/* FILTER PILLS */}
       {/* ================================================================== */}
       <div className="shrink-0 mt-3 px-5">
         <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
@@ -220,8 +220,8 @@ export function ConversationList() {
         </div>
       </div>
 
-      {/* ================================================================== */
-      {/* SECTION HEADER + CONVERSATION LIST                                */
+      {/* ================================================================== */}
+      {/* SECTION HEADER + CONVERSATION LIST */}
       {/* ================================================================== */}
       <div className="flex min-h-0 flex-1 flex-col px-5 mt-4 pb-20 md:pb-2">
         <div className="shrink-0 mb-1">
