@@ -319,10 +319,13 @@ io.on('connection', async (socket) => {
     async ({ messageId, emoji }: { messageId: string; emoji: string }) => {
       try {
         const msg = await db.message.findUnique({ where: { id: messageId } })
-        if (!msg) return
+        if (!msg || msg.deleted) return
 
         const conv = await getConversation(msg.conversationId)
         if (!isParticipant(conv, userId)) return
+
+        // Block self-reactions
+        if (msg.senderId === userId) return
 
         // Upsert: toggle reaction
         const existing = await db.reaction.findUnique({

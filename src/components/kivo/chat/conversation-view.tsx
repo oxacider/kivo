@@ -217,24 +217,24 @@ export function ConversationView() {
 
     const onDelivered = (data: { messageId: string; conversationId: string; status: string }) => {
       if (data.conversationId !== activeConversationId) return;
-      // Find the optimistic sending message and replace with delivered
-      const msgs = useChatStore.getState().messages;
-      const sending = msgs.find(m => m.status === 'sending' && m.conversationId === data.conversationId);
-      if (sending) {
-        // Will be updated when the real message:new comes from server
-      }
       updateMessage(data.messageId, { status: 'delivered' });
     };
 
     const onRead = (data: { conversationId: string; userId: string }) => {
       if (data.conversationId !== activeConversationId) return;
-      // Mark all sent/delivered messages as read
+      // Batch: mark all sent/delivered/sending messages as read in one update
       const msgs = useChatStore.getState().messages;
-      msgs.forEach(m => {
-        if (m.senderId === user?.id && (m.status === 'sent' || m.status === 'delivered' || m.status === 'sending')) {
-          updateMessage(m.id, { status: 'read' });
-        }
-      });
+      const updates = msgs
+        .filter(m => m.senderId === user?.id && (m.status === 'sent' || m.status === 'delivered' || m.status === 'sending'))
+        .map(m => ({ id: m.id, status: 'read' as const }));
+      if (updates.length > 0) {
+        useChatStore.setState((state) => ({
+          messages: state.messages.map((m) => {
+            const u = updates.find((up) => up.id === m.id);
+            return u ? { ...m, status: u.status } : m;
+          }),
+        }));
+      }
     };
 
     const onNew = (msg: any) => {
@@ -282,6 +282,13 @@ export function ConversationView() {
     })();
     return () => { cancelled = true; };
   }, [activeConversationId, token]);
+
+  // Clean up typing timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (typingTimeout.current) clearTimeout(typingTimeout.current);
+    };
+  }, []);
 
   // Scroll to bottom on new messages (only if already at bottom)
   useEffect(() => {

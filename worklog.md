@@ -297,3 +297,38 @@ Stage Summary:
 - All 7 Phase 3 requirements implemented: message status system, premium typing indicator, improved chat header, message actions (reply/copy/delete/forward/reactions), emoji reactions with animations, media input architecture prep
 - Existing Firebase architecture, security, TypeScript safety, and responsive design maintained
 
+---
+Task ID: phase3-quality-audit
+Agent: main
+Task: Phase 3 Complete Quality Audit
+
+Work Log:
+- Read and analyzed every Phase 3 file: conversation-view.tsx (860 lines), chat-store.ts, conversation-list.tsx, socket service index.ts, types/index.ts, schema.prisma, globals.css, messages API route
+- Identified 11 bugs across 3 severity levels
+- Fixed 6 bugs (1 critical, 4 medium, 1 minor-as-dead-code)
+- Verified fixes: TypeScript 0 errors, ESLint 0 errors, production build clean
+- Restored missing JWT_SECRET to .env
+
+Bugs found:
+- CRITICAL (1): Socket listener leak in conversation-list.tsx — useEffect dep on activeConversationId caused duplicate listeners on every conversation switch. Fixed: extracted handlers as named refs, added socket.off() in cleanup, removed activeConversationId from deps (uses getState() instead)
+- MEDIUM (4):
+  1. Typing timeout not cleaned on unmount — added useEffect cleanup
+  2. message:read handler triggered N individual re-renders — replaced forEach+updateMessage with single batched setState
+  3. Conversation-list online dot ignored showOnline privacy — added showOnline check
+  4. Reactions allowed on own/deleted messages — added guards in socket service
+- MINOR (1): Dead code in onDelivered handler — removed
+
+Bugs accepted (no fix needed):
+- formatLastSeen is static (cosmetic, would need interval)
+- Forward doesn't use optimistic sending (by design)
+- Optimistic message copies full User object (trivial perf, avoids runtime type issues)
+- Empty AnimatePresence on mobile reactions (no visual impact)
+
+Stage Summary:
+- Files modified: conversation-list.tsx, conversation-view.tsx, mini-services/kivo-chat-service/index.ts, .env
+- 4 files modified for bug fixes
+- TypeScript: 0 errors
+- ESLint: 0 errors
+- Production build: ✓ Compiled successfully
+- Socket service: running on port 3003
+- Dev server: running on port 3000

@@ -85,9 +85,10 @@ export function ConversationList() {
     const socket = connectSocket(token);
     socketRef.current = socket;
 
-    socket.on('message:new', (msg: any) => {
+    const onMessageNew = (msg: any) => {
       addMessage(msg);
-      if (msg.conversationId !== activeConversationId) {
+      const activeId = useChatStore.getState().activeConversationId;
+      if (msg.conversationId !== activeId) {
         updateConversation(msg.conversationId, {
           lastMessage: msg,
           updatedAt: msg.createdAt,
@@ -96,33 +97,49 @@ export function ConversationList() {
         socket.emit('message:read', { conversationId: msg.conversationId });
         api('/conversations/' + msg.conversationId + '/read', { token, method: 'POST', body: {} });
       }
-    });
-
-    socket.on('message:updated', (msg: any) => { updateMessage(msg.id, msg); });
-    socket.on('message:deleted', (data: any) => { removeMessage(data.messageId); });
-    socket.on('message:delivered', (data: any) => {
+    };
+    const onMessageUpdated = (msg: any) => { updateMessage(msg.id, msg); };
+    const onMessageDeleted = (data: any) => { removeMessage(data.messageId); };
+    const onMessageDelivered = (data: any) => {
       updateMessage(data.messageId, { status: 'delivered' });
-    });
-    socket.on('message:failed', (data: any) => {
-      // Find the optimistic sending message and mark as failed
+    };
+    const onMessageFailed = (data: any) => {
       const msgs = useChatStore.getState().messages;
       const sending = msgs.find(m => m.status === 'sending' && m.conversationId === data.conversationId);
       if (sending) {
         updateMessage(sending.id, { status: 'failed' });
       }
-    });
-    socket.on('reaction:update', (data: any) => {
+    };
+    const onReactionUpdate = (data: any) => {
       if (data.removed) {
         removeReaction(data.messageId, data.userId, data.emoji);
       } else {
         addReaction(data.messageId, data);
       }
-    });
-    socket.on('user:typing', (data: any) => { setTyping(data.userId, data.conversationId, data.isTyping, data.user); });
-    socket.on('message:read', (data: any) => { updateConversation(data.conversationId, { unreadCount: 0 } as Partial<Conversation>); });
+    };
+    const onUserTyping = (data: any) => { setTyping(data.userId, data.conversationId, data.isTyping, data.user); };
+    const onMessageRead = (data: any) => { updateConversation(data.conversationId, { unreadCount: 0 } as Partial<Conversation>); };
 
-    return () => { disconnectSocket(); };
-  }, [isDemo, token, loadData, activeConversationId, addMessage, updateConversation, updateMessage, removeMessage, setTyping]);
+    socket.on('message:new', onMessageNew);
+    socket.on('message:updated', onMessageUpdated);
+    socket.on('message:deleted', onMessageDeleted);
+    socket.on('message:delivered', onMessageDelivered);
+    socket.on('message:failed', onMessageFailed);
+    socket.on('reaction:update', onReactionUpdate);
+    socket.on('user:typing', onUserTyping);
+    socket.on('message:read', onMessageRead);
+
+    return () => {
+      socket.off('message:new', onMessageNew);
+      socket.off('message:updated', onMessageUpdated);
+      socket.off('message:deleted', onMessageDeleted);
+      socket.off('message:delivered', onMessageDelivered);
+      socket.off('message:failed', onMessageFailed);
+      socket.off('reaction:update', onReactionUpdate);
+      socket.off('user:typing', onUserTyping);
+      socket.off('message:read', onMessageRead);
+    };
+  }, [isDemo, token, loadData, addMessage, updateConversation, updateMessage, removeMessage, addReaction, removeReaction, setTyping]);
 
   const selectConversation = useCallback((id: string) => {
     setActiveConversationId(id);
@@ -292,7 +309,7 @@ export function ConversationList() {
                       </AvatarFallback>
                     </Avatar>
                   </div>
-                  {other?.online && (
+                  {other?.showOnline !== false && other?.online && (
                     <span className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-[2.5px] border-surface-1 bg-online" />
                   )}
                 </div>
