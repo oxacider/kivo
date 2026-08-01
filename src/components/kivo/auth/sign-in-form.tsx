@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -171,7 +171,15 @@ export function SignInForm() {
           <div className="flex justify-end">
             <button
               type="button"
-              onClick={() => setView('forgot-password')}
+              onClick={async () => {
+                if (!email) { toast.error('Please enter your email first'); return; }
+                try {
+                  await sendPasswordResetEmail(auth, email);
+                  toast.success('Password reset link sent to your email');
+                } catch (err: any) {
+                  toast.error(getFirebaseErrorMessage(err) || 'Failed to send reset email');
+                }
+              }}
               className="text-xs text-muted-foreground hover:text-primary transition-colors"
             >
               Forgot password?
