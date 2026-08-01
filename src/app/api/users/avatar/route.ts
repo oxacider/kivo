@@ -1,5 +1,5 @@
 import { getAuthUser, errorResponse } from '@/lib/auth';
-import { db } from '@/lib/db';
+import { storeAvatar } from '@/lib/profiles-service';
 
 export async function POST(request: Request) {
   try {
@@ -14,13 +14,9 @@ export async function POST(request: Request) {
 
     const bytes = await file.arrayBuffer();
     const base64 = `data:${file.type};base64,${btoa(String.fromCharCode(...new Uint8Array(bytes)))}`;
+    const avatar = await storeAvatar(user.id, base64);
 
-    await db.user.update({
-      where: { id: user.id },
-      data: { avatar: base64 },
-    });
-
-    return Response.json({ success: true, data: { avatar: base64 } });
+    return Response.json({ success: true, data: { avatar } });
   } catch {
     return errorResponse('Failed to upload avatar', 500);
   }

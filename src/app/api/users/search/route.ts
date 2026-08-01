@@ -1,5 +1,5 @@
-import { db } from '@/lib/db';
 import { getAuthUser, errorResponse } from '@/lib/auth';
+import { searchProfiles } from '@/lib/profiles-service';
 
 export async function GET(request: Request) {
   try {
@@ -10,22 +10,7 @@ export async function GET(request: Request) {
     const q = url.searchParams.get('q')?.trim();
     if (!q) return errorResponse('Search query is required');
 
-    const users = await db.user.findMany({
-      where: {
-        AND: [
-          { id: { not: user.id } },
-          {
-            OR: [
-              { displayName: { contains: q } },
-              { username: { contains: q } },
-            ],
-          },
-        ],
-      },
-      select: { id: true, displayName: true, username: true, avatar: true, bio: true, status: true, online: true, lastSeen: true },
-      take: 20,
-    });
-
+    const users = await searchProfiles(q, user.id);
     return Response.json({ success: true, data: users });
   } catch {
     return errorResponse('Search failed', 500);

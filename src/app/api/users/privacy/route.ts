@@ -1,5 +1,5 @@
 import { getAuthUser, errorResponse } from '@/lib/auth';
-import { db } from '@/lib/db';
+import { updatePrivacySettings, type PrivacyInput } from '@/lib/profiles-service';
 
 export async function PUT(request: Request) {
   try {
@@ -7,24 +7,13 @@ export async function PUT(request: Request) {
     if (!user) return errorResponse('Unauthorized', 401);
 
     const body = await request.json();
-    const allowed = ['showOnline', 'showLastSeen', 'showReadReceipts'];
     const data: Record<string, boolean> = {};
-    for (const key of allowed) {
+    for (const key of ['showOnline', 'showLastSeen', 'showReadReceipts']) {
       if (typeof body[key] === 'boolean') data[key] = body[key];
     }
     if (Object.keys(data).length === 0) return errorResponse('No valid fields to update');
 
-    const updated = await db.user.update({
-      where: { id: user.id },
-      data,
-      select: {
-        id: true,
-        showOnline: true,
-        showLastSeen: true,
-        showReadReceipts: true,
-      },
-    });
-
+    const updated = await updatePrivacySettings(user.id, data as PrivacyInput);
     return Response.json({ success: true, data: updated });
   } catch {
     return errorResponse('Failed to update privacy settings', 500);
