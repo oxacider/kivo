@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
 import { getAuthUser } from '@/lib/auth';
+import { registerToken, removeToken } from '@/lib/notification-service';
 
 /* ------------------------------------------------------------------ */
 /*  POST /api/notifications/token                                     */
@@ -29,13 +29,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // Upsert: update existing or create new
-    await db.deviceToken.upsert({
-      where: { userId_token: { userId: user.id, token } },
-      update: { platform },
-      create: { userId: user.id, token, platform },
-    });
-
+    await registerToken(user.id, token, platform);
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error('[DeviceToken] POST /notifications/token error:', err);
@@ -67,10 +61,7 @@ export async function DELETE(request: NextRequest) {
   }
 
   try {
-    await db.deviceToken.deleteMany({
-      where: { userId: user.id, token },
-    });
-
+    await removeToken(user.id, token);
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error('[DeviceToken] DELETE /notifications/token error:', err);

@@ -9,7 +9,7 @@
  * or base64 env var (FCM_SERVICE_ACCOUNT_B64).
  */
 
-import { db } from '@/lib/db';
+import { getTokens, cleanupInvalidTokens } from '@/lib/notification-service';
 
 let adminApp: import('firebase-admin/app').App | null = null;
 let messaging: import('firebase-admin/messaging').Messaging | null = null;
@@ -88,14 +88,9 @@ export async function sendPushToUser(
   if (!msg) return 0;
 
   try {
-    const tokens = await db.deviceToken.findMany({
-      where: { userId },
-      select: { token: true },
-    });
+    const tokenList = await getTokens(userId);
 
-    if (tokens.length === 0) return 0;
-
-    const tokenList = tokens.map((t) => t.token);
+    if (tokenList.length === 0) return 0;
 
     const message: import('firebase-admin/messaging').MulticastMessage = {
       notification: {
@@ -131,7 +126,7 @@ export async function sendPushToUser(
 
     // Clean up invalid tokens
     if (response.failureCount > 0) {
-      await cleanupInvalidTokens(tokenList, response.responses);
+      await doCleanupInvalidTokens(tokenList, response.responses);
     }
 
     return tokenList.length;
@@ -161,7 +156,7 @@ export async function sendPushToUsers(
 //  Cleanup invalid tokens
 // -------------------------------------------------------------------
 
-async function cleanupInvalidTokens(
+async function doCleanupInvalidTokens(
   tokens: string[],
   responses: import('firebase-admin/messaging').SendResponse[],
 ) {
@@ -171,7 +166,6 @@ async function cleanupInvalidTokens(
     const err = responses[i].error;
     if (!err) continue;
 
-    // Delete tokens that are invalid, unregistered, or not for this project
     const code = err.code;
     if (
       code === 'messaging/invalid-registration-token' ||
@@ -184,9 +178,7 @@ async function cleanupInvalidTokens(
 
   if (toDelete.length > 0) {
     try {
-      await db.deviceToken.deleteMany({
-        where: { token: { in: toDelete } },
-      });
+      await cleanupInvalidTokens(toDelete);
       console.info(`[FCM Send] Cleaned up ${toDelete.length} invalid token(s)`);
     } catch (err) {
       console.error('[FCM Send] Token cleanup failed:', err);
@@ -195,13 +187,5 @@ async function cleanupInvalidTokens(
 }
 
 // -------------------------------------------------------------------
-//  Remove all tokens for a user (logout)
+//  Remove all tokens for a user (logout) — see notification-service
 // -------------------------------------------------------------------
-
-export async function removeAllTokensForUser(userId: string): Promise<void> {
-  try {
-    await db.deviceToken.deleteMany({ where: { userId } });
-  } catch (err) {
-    console.error('[FCM Send] removeAllTokensForUser error:', err);
-  }
-}
