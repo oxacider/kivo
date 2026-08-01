@@ -12,16 +12,14 @@ importScripts(
   'https://www.gstatic.com/firebasejs/12.0.0/firebase-messaging-compat.js'
 );
 
-// ── Firebase Config ─────────────────────────────────────────────────
-// Replace with your real Firebase project configuration.
-// Obtain from: Firebase Console → Project Settings → Your apps → Web app
+// ── Firebase Config (kivo-96303) ────────────────────────────────
 const firebaseConfig = {
-  apiKey: '',
-  authDomain: '',
-  projectId: '',
-  storageBucket: '',
-  messagingSenderId: '',
-  appId: '',
+  apiKey: 'AIzaSyDhfEzocXb2A0OrBgprGV8FDYUuJm6AI_E',
+  authDomain: 'kivo-96303.firebaseapp.com',
+  projectId: 'kivo-96303',
+  storageBucket: 'kivo-96303.firebasestorage.app',
+  messagingSenderId: '392138763047',
+  appId: '1:392138763047:web:589d38035cadc2c42dd702',
 };
 
 let messaging = null;
