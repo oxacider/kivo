@@ -155,12 +155,12 @@ export async function updateProfile(
  * Store an avatar data-URL for the authenticated user.
  * Returns the stored data-URL string.
  */
-export async function storeAvatar(userId: string, dataUrl: string): Promise<string> {
+export async function storeAvatar(userId: string, url: string): Promise<string> {
   await db.user.update({
     where: { id: userId },
-    data: { avatar: dataUrl },
+    data: { avatar: url },
   });
-  return dataUrl;
+  return url;
 }
 
 /**

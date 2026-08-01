@@ -105,6 +105,7 @@ export interface MediaAttachment {
   width?: number;
   height?: number;
   createdAt?: string;
+  publicId?: string;
 }
 
 export interface PendingImage {
