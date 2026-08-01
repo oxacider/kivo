@@ -3,6 +3,7 @@
   "version": "0.2.1",
   "private": true,
   "scripts": {
+    "postinstall": "prisma generate",
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
     "build": "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
     "build:android": "node -e \"if(!process.env.CAPACITOR_SERVER_URL){console.error('ERROR: CAPACITOR_SERVER_URL is required. Usage: CAPACITOR_SERVER_URL=https://your-server.com bun run build:android');process.exit(1)}\" && next build && mkdir -p out && cp public/logo.png out/ && npx cap sync android",
