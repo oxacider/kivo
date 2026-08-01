@@ -27,7 +27,7 @@ export async function getFirebaseAdminApp(): Promise<import('firebase-admin/app'
   try {
     const admin = await import('firebase-admin/app');
 
-    // Reuse an existing admin app if something else initialized it (e.g. fcm-send)
+    // Reuse an existing admin app if already initialized
     if (admin.getApps().length > 0) {
       adminApp = admin.getApps()[0];
       return adminApp;

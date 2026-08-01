@@ -1,57 +1,31 @@
 /**
- * Server-side FCM sender using firebase-admin.
+ * Server-side FCM sender using the shared Firebase Admin app.
  *
  * Used by:
  *   - Socket service (push when recipient offline)
  *   - Any API route that needs to send a push notification
  *
- * The admin app is lazily initialized from the service-account JSON path
- * or base64 env var (FCM_SERVICE_ACCOUNT_B64).
+ * The admin app is initialized once in firebase-admin.ts via
+ * FIREBASE_SERVICE_ACCOUNT_B64.
  */
 
 import { getTokens, cleanupInvalidTokens } from '@/lib/notification-service';
+import { getFirebaseAdminApp } from '@/lib/firebase-admin';
 
-let adminApp: import('firebase-admin/app').App | null = null;
 let messaging: import('firebase-admin/messaging').Messaging | null = null;
 
 async function getMessaging(): Promise<import('firebase-admin/messaging').Messaging | null> {
   if (messaging) return messaging;
 
-  // Skip if no config available (dev mode without FCM credentials)
-  const projectId = process.env.FCM_PROJECT_ID;
-  if (!projectId) {
-    return null;
-  }
-
   try {
-    // Dynamic imports — firebase-admin is server-only, never bundled to client
-    const admin = await import('firebase-admin/app');
+    const app = await getFirebaseAdminApp();
+    if (!app) return null;
+
     const adminMessaging = await import('firebase-admin/messaging');
-
-    if (admin.getApps().length === 0) {
-      let credential: import('firebase-admin/app').AppOptions['credential'];
-
-      if (process.env.FCM_SERVICE_ACCOUNT_B64) {
-        // Base64-encoded service account JSON
-        const json = Buffer.from(process.env.FCM_SERVICE_ACCOUNT_B64, 'base64').toString('utf-8');
-        credential = admin.cert(JSON.parse(json));
-      } else if (process.env.FCM_SERVICE_ACCOUNT_PATH) {
-        const sa = await import(process.env.FCM_SERVICE_ACCOUNT_PATH);
-        credential = admin.cert(sa);
-      } else {
-        // Try Google Application Default Credentials
-        credential = admin.applicationDefault();
-      }
-
-      adminApp = admin.initializeApp({ credential, projectId });
-    } else {
-      adminApp = admin.getApps()[0];
-    }
-
-    messaging = adminMessaging.getMessaging(adminApp);
+    messaging = adminMessaging.getMessaging(app);
     return messaging;
   } catch (err) {
-    console.error('[FCM Send] Failed to initialize firebase-admin:', err);
+    console.error('[FCM Send] Failed to initialize messaging:', err);
     return null;
   }
 }
