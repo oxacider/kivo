@@ -30,93 +30,7 @@ model User {
   createdAt          DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  messages        Message[]     @relation("UserMessages")
-  sentRequests    Friendship[]  @relation("SentRequests")
-  receivedRequests Friendship[]  @relation("ReceivedRequests")
-  blockedBy       Block[]       @relation("BlockedBy")
-  blockedUsers    Block[]       @relation("BlockedUsers")
-  conversation1   Conversation[] @relation("User1")
-  conversation2   Conversation[] @relation("User2")
   deviceTokens    DeviceToken[]
-  reactions       Reaction[] @relation("UserReactions")
-}
-
-model Friendship {
-  id            String   @id @default(cuid())
-  senderId      String
-  receiverId    String
-  status        String   @default("pending")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  sender    User @relation("SentRequests", fields: [senderId], references: [id], onDelete: Cascade)
-  receiver  User @relation("ReceivedRequests", fields: [receiverId], references: [id], onDelete: Cascade)
-
-  @@unique([senderId, receiverId])
-}
-
-model Block {
-  id        String   @id @default(cuid())
-  blockerId String
-  blockedId String
-  createdAt DateTime @default(now())
-
-  blocker User @relation("BlockedUsers", fields: [blockerId], references: [id], onDelete: Cascade)
-  blocked User @relation("BlockedBy", fields: [blockedId], references: [id], onDelete: Cascade)
-
-  @@unique([blockerId, blockedId])
-}
-
-model Conversation {
-  id        String   @id @default(cuid())
-  user1Id   String
-  user2Id   String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  user1    User      @relation("User1", fields: [user1Id], references: [id], onDelete: Cascade)
-  user2    User      @relation("User2", fields: [user2Id], references: [id], onDelete: Cascade)
-  messages Message[]
-
-  @@unique([user1Id, user2Id])
-}
-
-model Message {
-  id              String   @id @default(cuid())
-  conversationId  String
-  senderId        String
-  content         String
-  type            String   @default("text")
-  status          String   @default("sent")
-  replyToId       String?
-  edited          Boolean  @default(false)
-  deleted         Boolean  @default(false)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sender       User         @relation("UserMessages", fields: [senderId], references: [id], onDelete: Cascade)
-  replyTo      Message?     @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
-  replies      Message[]    @relation("MessageReplies")
-  reactions    Reaction[]    @relation("MessageReactions")
-  attachments  MediaAttachment[] @relation("MessageAttachments")
-
-  @@index([conversationId])
-  @@index([senderId])
-}
-
-model Reaction {
-  id          String   @id @default(cuid())
-  messageId   String
-  userId      String
-  emoji       String
-  createdAt   DateTime @default(now())
-
-  message Message @relation("MessageReactions", fields: [messageId], references: [id], onDelete: Cascade)
-  user    User    @relation("UserReactions", fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([messageId, userId, emoji])
-  @@index([messageId])
 }
 
 model DeviceToken {
@@ -132,21 +46,4 @@ model DeviceToken {
   @@unique([userId, token])
   @@index([token])
   @@index([userId])
-}
-
-model MediaAttachment {
-  id          String   @id @default(cuid())
-  messageId   String?
-  type        String   // 'image' | 'video' | 'file' | 'voice'
-  url         String   // base64 data URL
-  name        String   // original filename
-  size        Int      // bytes
-  mimeType    String
-  width       Int?
-  height      Int?
-  createdAt   DateTime @default(now())
-
-  message     Message? @relation("MessageAttachments", fields: [messageId], references: [id], onDelete: Cascade)
-
-  @@index([messageId])
 }
