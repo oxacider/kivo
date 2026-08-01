@@ -2,16 +2,39 @@
 
 import { useState } from 'react';
 import { motion } from 'framer-motion';
+import { createUserWithEmailAndPassword, deleteUser } from 'firebase/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuthStore, triggerNotifications } from '@/stores/auth-store';
 import { useUIStore } from '@/stores/ui-store';
 import { api } from '@/lib/api';
+import { auth } from '@/lib/firebase';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import type { User } from '@/types';
 import Image from 'next/image';
+
+/** Map Firebase Auth error codes to user-friendly messages. */
+function getFirebaseErrorMessage(err: any): string | null {
+  const code: string = err?.code || '';
+  switch (code) {
+    case 'auth/email-already-in-use':
+      return 'An account with this email already exists';
+    case 'auth/invalid-email':
+      return 'Please enter a valid email address';
+    case 'auth/weak-password':
+      return 'Password must be at least 6 characters';
+    case 'auth/operation-not-allowed':
+      return 'Email/password sign-up is not enabled';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Please try again later';
+    case 'auth/network-request-failed':
+      return 'Network error. Please check your connection';
+    default:
+      return null;
+  }
+}
 
 export function SignUpForm() {
   const setView = useUIStore((s) => s.setView);
@@ -27,16 +50,36 @@ export function SignUpForm() {
     e.preventDefault();
     if (!form.email || !form.password || !form.displayName || !form.username) return;
     setLoading(true);
+
+    // Track the created Firebase account so it can be rolled back if profile creation fails
+    let firebaseUser: any = null;
+
     try {
-      const data: any = await api<{ user: User; token: string }>('/auth/register', { body: form });
+      // 1) Create the Firebase Authentication account
+      const credential = await createUserWithEmailAndPassword(auth, form.email, form.password);
+      firebaseUser = credential.user;
+      const idToken = await credential.user.getIdToken();
+
+      // 2) Create the KIVO profile (Supabase Postgres) — email comes from the verified token
+      const data = await api<{ user: User; verificationCode?: string }>('/auth/register', {
+        token: idToken,
+        body: { displayName: form.displayName, username: form.username },
+      });
+
+      // Store the Firebase ID token (the backend now accepts it)
       setUser(data.user);
-      setToken(data.token);
+      setToken(idToken);
       if (data.verificationCode) setDevVerificationCode(data.verificationCode);
       setView('verify-email');
       toast.success('Account created! Please verify your email.');
       triggerNotifications();
     } catch (err: any) {
-      toast.error(err.message || 'Sign up failed');
+      // Profile creation failed after the Firebase account was created — roll it back
+      // so the user can retry without an orphaned account.
+      if (firebaseUser) {
+        deleteUser(firebaseUser).catch(() => {});
+      }
+      toast.error(getFirebaseErrorMessage(err) || err.message || 'Sign up failed');
     } finally {
       setLoading(false);
     }

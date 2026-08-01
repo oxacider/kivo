@@ -7,8 +7,28 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useUIStore } from '@/stores/ui-store';
 import { api } from '@/lib/api';
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { auth } from '@/lib/firebase';
 import { ArrowLeft, Loader2, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
+
+/** Map Firebase Auth error codes to user-friendly messages (password reset context). */
+function getFirebaseErrorMessage(err: any): string | null {
+  const code: string = err?.code || '';
+  switch (code) {
+    case 'auth/invalid-email':
+      return 'Please enter a valid email address';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Please try again later';
+    case 'auth/network-request-failed':
+      return 'Network error. Please check your connection';
+    case 'auth/invalid-api-key':
+    case 'auth/api-key-not-valid':
+      return 'Authentication is misconfigured. Please contact support';
+    default:
+      return null;
+  }
+}
 
 export function ForgotPasswordForm() {
   const setView = useUIStore((s) => s.setView);
@@ -18,6 +38,7 @@ export function ForgotPasswordForm() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [step, setStep] = useState<'email' | 'code' | 'success'>('email');
   const [loading, setLoading] = useState(false);
+  const [resetVia, setResetVia] = useState<'firebase' | 'legacy'>('legacy');
   const [devCode, setDevCode] = useState<string | null>(null);
   const [countdown, setCountdown] = useState(0);
 
@@ -37,13 +58,38 @@ export function ForgotPasswordForm() {
     if (!email) return;
     setLoading(true);
     try {
+      // Primary path: Firebase Authentication. sendPasswordResetEmail() sends the
+      // reset link email for Firebase accounts. It rejects with
+      // auth/user-not-found when the email has no Firebase account — in that
+      // case we fall back to the legacy 6-digit code flow for legacy accounts.
+      let firebaseSent = false;
+      try {
+        await sendPasswordResetEmail(auth, email);
+        firebaseSent = true;
+      } catch (fbErr: any) {
+        if (fbErr?.code !== 'auth/user-not-found') {
+          throw fbErr;
+        }
+      }
+
+      if (firebaseSent) {
+        setResetVia('firebase');
+        setStep('success');
+        toast.success('Password reset link sent to your email');
+        return;
+      }
+
+      // Legacy fallback: 6-digit reset code stored in the DB.
       const data: any = await api('/auth/forgot-password', { body: { email } });
       if (data.code) setDevCode(data.code);
       setStep('code');
       startCountdown();
       toast.info(data.message || 'Enter the 6-digit code to reset your password');
-    } catch (err: any) { toast.error(err.message); }
-    setLoading(false);
+    } catch (err: any) {
+      toast.error(getFirebaseErrorMessage(err) || err?.message || 'Failed to send reset email');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleResend = async () => {
@@ -116,7 +162,9 @@ export function ForgotPasswordForm() {
           </div>
           <h1 className="mb-2 text-2xl font-semibold tracking-tight">Password Reset!</h1>
           <p className="mb-8 text-sm text-muted-foreground">
-            Your password has been successfully reset. You can now sign in with your new password.
+            {resetVia === 'firebase'
+              ? 'We sent a password reset link to your email. Follow the link to set a new password.'
+              : 'Your password has been successfully reset. You can now sign in with your new password.'}
           </p>
           <Button
             onClick={() => setView('signin')}

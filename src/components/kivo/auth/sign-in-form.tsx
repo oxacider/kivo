@@ -2,16 +2,43 @@
 
 import { useState } from 'react';
 import { motion } from 'framer-motion';
+import { signInWithEmailAndPassword } from 'firebase/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuthStore, triggerNotifications } from '@/stores/auth-store';
 import { useUIStore } from '@/stores/ui-store';
+import { auth } from '@/lib/firebase';
 import { api } from '@/lib/api';
 import { ArrowLeft, Loader2, FlaskConical } from 'lucide-react';
 import { toast } from 'sonner';
 import type { User } from '@/types';
 import Image from 'next/image';
+
+/** Map Firebase Auth error codes to user-friendly messages. */
+function getFirebaseErrorMessage(err: any): string | null {
+  const code: string = err?.code || '';
+  switch (code) {
+    case 'auth/invalid-email':
+      return 'Please enter a valid email address';
+    case 'auth/user-not-found':
+    case 'auth/wrong-password':
+    case 'auth/invalid-credential':
+    case 'auth/invalid-login-credentials':
+      return 'Incorrect email or password';
+    case 'auth/user-disabled':
+      return 'This account has been disabled';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Please try again later';
+    case 'auth/network-request-failed':
+      return 'Network error. Please check your connection';
+    case 'auth/invalid-api-key':
+    case 'auth/api-key-not-valid':
+      return 'Authentication is misconfigured. Please contact support';
+    default:
+      return null;
+  }
+}
 
 export function SignInForm() {
   const setView = useUIStore((s) => s.setView);
@@ -25,12 +52,40 @@ export function SignInForm() {
     if (!email || !password) return;
     setLoading(true);
     try {
-      const data = await api<{ user: User; token: string }>('/auth/login', {
-        body: { email, password },
-      });
-      setUser(data.user);
-      setToken(data.token);
-      if (!data.user.emailVerified) {
+      const credential = await signInWithEmailAndPassword(auth, email, password);
+      const firebaseUser = credential.user;
+      const idToken = await firebaseUser.getIdToken();
+
+      // Fetch the canonical KIVO user (DB record) so user.id matches the ids
+      // used by chat/friends APIs. Falls back to a Firebase-derived user if
+      // no DB record exists yet (e.g. account not created via Signup).
+      let userToStore: User;
+      try {
+        userToStore = await api<User>('/auth/me', { token: idToken });
+      } catch {
+        userToStore = {
+          id: firebaseUser.uid,
+          email: firebaseUser.email || '',
+          displayName: firebaseUser.displayName || '',
+          username: (firebaseUser.email || '').split('@')[0] || firebaseUser.uid,
+          avatar: '',
+          bio: '',
+          status: '',
+          online: true,
+          lastSeen: new Date().toISOString(),
+          theme: 'dark',
+          emailVerified: firebaseUser.emailVerified,
+          showOnline: true,
+          showLastSeen: true,
+          showReadReceipts: true,
+          createdAt: firebaseUser.metadata.creationTime || new Date().toISOString(),
+          updatedAt: firebaseUser.metadata.lastSignInTime || new Date().toISOString(),
+        };
+      }
+
+      setUser(userToStore);
+      setToken(idToken);
+      if (!userToStore.emailVerified) {
         setView('verify-email');
         toast.info('Please verify your email to continue');
       } else {
@@ -39,7 +94,7 @@ export function SignInForm() {
       }
       triggerNotifications();
     } catch (err: any) {
-      toast.error(err.message || 'Sign in failed');
+      toast.error(getFirebaseErrorMessage(err) || 'Sign in failed');
     } finally {
       setLoading(false);
     }

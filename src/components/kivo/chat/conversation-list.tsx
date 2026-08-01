@@ -8,6 +8,7 @@ import { useUIStore } from '@/stores/ui-store';
 import { api } from '@/lib/api';
 import { connectSocket, disconnectSocket } from '@/lib/socket';
 import { getAllQueuedMessages } from '@/lib/offline-queue';
+import { subscribeConversations, fsConversationToConversation, markConversationRead, type FSConversationDoc } from '@/lib/chat-service';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Search, Bell, MessageSquarePlus } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -53,85 +54,97 @@ export function ConversationList() {
   const {
     conversations, activeConversationId, setActiveConversationId,
     searchQuery, setSearchQuery, setConversations,
-    updateConversation, addMessage, updateMessage, removeMessage,
-    setTyping, clearTypingForConversation, clearUnread, addReaction, removeReaction,
+    presenceMap, clearTypingForConversation, clearUnread,
     setNetworkStatus, syncQueuedMessages,
   } = useChatStore();
   const { user, token } = useAuthStore();
   const { setSearchOpen, setNotificationsOpen, setMobileSidebarOpen } = useUIStore();
-  const { pendingRequests, setFriends, setPendingRequests } = useFriendsStore();
+  // Friends + pending requests now stream from the useFriends() Firestore hook.
+  const { friends, pendingRequests } = useFriendsStore();
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
   const socketRef = useRef<any>(null);
+  /** One-shot toast guard for the Firestore conversations subscription error. */
+  const convErrorShownRef = useRef(false);
+  /** Raw Firestore conversation docs (Phase 2). */
+  const [fsConvs, setFsConvs] = useState<FSConversationDoc[]>([]);
+  /** Profiles fetched for participants not in the friends list. */
+  const [extraProfiles, setExtraProfiles] = useState<Record<string, User>>({});
 
   const isDemo = token?.startsWith('demo-');
   const greeting = useMemo(() => getGreeting(), []);
 
-  const loadData = useCallback(async () => {
+  /**
+   * Phase 2: conversations now live in Firestore.
+   * - Subscribe to conversation docs the user participates in.
+   * - Resolve otherUser from the friends list / lazily fetched profiles.
+   * - Phase 3: live online/lastSeen is merged from the RTDB presence map.
+   */
+  useEffect(() => {
+    if (!token) return;
     if (isDemo) return;
-    try {
-      const convs = await api<Conversation[]>('/conversations', { token });
-      setConversations(convs);
-      const f = await api<User[]>('/friends/list', { token });
-      setFriends(f);
-      const reqs = await api<any[]>('/friends/requests', { token });
-      setPendingRequests(reqs);
-    } catch (err: any) {
-      toast.error(err.message);
+    if (!user?.id) return;
+    const meId = user.id;
+
+    const unsub = subscribeConversations(
+      meId,
+      (convs) => setFsConvs(convs),
+      (err) => {
+        console.error('[chat] conversation subscription error', err);
+        if (!convErrorShownRef.current) {
+          convErrorShownRef.current = true;
+          toast.error('Chat unavailable — check connection and Firestore setup');
+        }
+      }
+    );
+    return () => unsub();
+  }, [token, isDemo, user?.id]);
+
+  // Lazily fetch profiles for conversation participants that aren't in the friends list.
+  useEffect(() => {
+    if (!token || isDemo || !user?.id || fsConvs.length === 0) return;
+    const meId = user.id;
+    const known = new Set([...friends.map((f) => f.id), ...Object.keys(extraProfiles)]);
+    for (const c of fsConvs) {
+      const otherId = c.participants.find((p) => p !== meId);
+      if (otherId && !known.has(otherId)) {
+        api<User>('/users/' + otherId, { token })
+          .then((u) => setExtraProfiles((prev) => (prev[otherId] ? prev : { ...prev, [otherId]: u })))
+          .catch(() => {});
+      }
     }
-  }, [isDemo, token, setConversations, setFriends, setPendingRequests]);
+  }, [fsConvs, friends, extraProfiles, token, isDemo, user?.id]);
+
+  // Derive the app Conversation objects (keeps the UI shape unchanged).
+  // Phase 3: overlay live RTDB presence (online/lastSeen) onto otherUser.
+  useEffect(() => {
+    if (!user?.id) return;
+    const meId = user.id;
+    const byId = new Map<string, User>();
+    for (const f of friends) byId.set(f.id, f);
+    for (const [id, u] of Object.entries(extraProfiles)) byId.set(id, u);
+    const mapped = fsConvs.map((c) => {
+      const otherId = c.participants.find((p) => p !== meId) ?? '';
+      const base = byId.get(otherId);
+      const presence = base ? presenceMap[otherId] : undefined;
+      const otherUser = base
+        ? presence
+          ? { ...base, online: presence.online, lastSeen: presence.lastSeen }
+          : base
+        : undefined;
+      return fsConversationToConversation(c, meId, otherUser);
+    });
+    setConversations(mapped);
+  }, [fsConvs, friends, extraProfiles, presenceMap, user?.id, setConversations]);
 
   useEffect(() => {
     if (!token) return;
     if (isDemo) return;
-    loadData();
     const socket = connectSocket(token);
     socketRef.current = socket;
 
-    const onMessageNew = (msg: any) => {
-      addMessage(msg);
-      const activeId = useChatStore.getState().activeConversationId;
-      if (msg.conversationId !== activeId) {
-        updateConversation(msg.conversationId, {
-          lastMessage: msg,
-          updatedAt: msg.createdAt,
-        } as Partial<Conversation>);
-      } else {
-        socket.emit('message:read', { conversationId: msg.conversationId });
-        api('/conversations/' + msg.conversationId + '/read', { token, method: 'POST', body: {} });
-      }
-    };
-    const onMessageUpdated = (msg: any) => { updateMessage(msg.id, msg); };
-    const onMessageDeleted = (data: any) => { removeMessage(data.messageId); };
-    const onMessageDelivered = (data: any) => {
-      updateMessage(data.messageId, { status: 'delivered' });
-    };
-    const onMessageFailed = (data: any) => {
-      const msgs = useChatStore.getState().messages;
-      const sending = msgs.find(m => (m.status === 'sending' || m.status === 'queued') && m.conversationId === data.conversationId);
-      if (sending) {
-        updateMessage(sending.id, { status: 'failed' });
-      }
-    };
-    const onReactionUpdate = (data: any) => {
-      if (data.removed) {
-        removeReaction(data.messageId, data.userId, data.emoji);
-      } else {
-        addReaction(data.messageId, data);
-      }
-    };
-    const onUserTyping = (data: any) => { setTyping(data.userId, data.conversationId, data.isTyping, data.user); };
-    const onMessageRead = (data: any) => { updateConversation(data.conversationId, { unreadCount: 0 } as Partial<Conversation>); };
-
-    socket.on('message:new', onMessageNew);
-    socket.on('message:updated', onMessageUpdated);
-    socket.on('message:deleted', onMessageDeleted);
-    socket.on('message:delivered', onMessageDelivered);
-    socket.on('message:failed', onMessageFailed);
-    socket.on('reaction:update', onReactionUpdate);
-    socket.on('user:typing', onUserTyping);
-    socket.on('message:read', onMessageRead);
-
     // Network awareness + auto-sync on reconnect
+    // (typing + presence moved to RTDB in Phase 3; socket kept only for
+    //  network-status/reconnect and legacy mini-service until Phase 8)
     const handleOnline = () => { setNetworkStatus('online'); syncQueuedMessages(); };
     const handleOffline = () => setNetworkStatus('offline');
     const handleReconnect = () => { setNetworkStatus('reconnecting'); };
@@ -171,14 +184,6 @@ export function ConversationList() {
     })();
 
     return () => {
-      socket.off('message:new', onMessageNew);
-      socket.off('message:updated', onMessageUpdated);
-      socket.off('message:deleted', onMessageDeleted);
-      socket.off('message:delivered', onMessageDelivered);
-      socket.off('message:failed', onMessageFailed);
-      socket.off('reaction:update', onReactionUpdate);
-      socket.off('user:typing', onUserTyping);
-      socket.off('message:read', onMessageRead);
       socket.off('reconnect', handleReconnect);
       socket.off('reconnect_attempt', handleReconnect);
       socket.off('reconnect_failed', handleReconnectFail);
@@ -186,18 +191,18 @@ export function ConversationList() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [isDemo, token, loadData, addMessage, updateConversation, updateMessage, removeMessage, addReaction, removeReaction, setTyping, setNetworkStatus, syncQueuedMessages]);
+  }, [isDemo, token, setNetworkStatus, syncQueuedMessages]);
 
   const selectConversation = useCallback((id: string) => {
     setActiveConversationId(id);
     clearTypingForConversation(id);
     clearUnread(id);
     setMobileSidebarOpen(false);
-    if (!isDemo) {
-      api('/conversations/' + id + '/read', { token, method: 'POST', body: {} });
-      if (socketRef.current) socketRef.current.emit('message:read', { conversationId: id });
+    const myId = user?.id;
+    if (!isDemo && myId) {
+      markConversationRead(id, myId).catch(() => {});
     }
-  }, [isDemo, token, activeConversationId, setActiveConversationId, clearTypingForConversation, clearUnread, setMobileSidebarOpen]);
+  }, [isDemo, user?.id, setActiveConversationId, clearTypingForConversation, clearUnread, setMobileSidebarOpen]);
 
   /* Filter logic */
   const filtered = useMemo(() => {

@@ -1,7 +1,8 @@
 import { create } from 'zustand';
-import type { Message, Conversation, TypingUser, Reaction, MediaAttachment } from '@/types';
+import type { Message, Conversation, TypingUser, Reaction, MediaAttachment, QueuedMessage } from '@/types';
 import { saveQueuedMessage, getAllQueuedMessages, removeQueuedMessage } from '@/lib/offline-queue';
-import { getSocket, isSocketConnected } from '@/lib/socket';
+import { sendMessage as firestoreSendMessage } from '@/lib/chat-service';
+import { useAuthStore } from '@/stores/auth-store';
 
 export interface TypingUserData extends TypingUser {
   user?: { id: string; displayName: string; avatar: string } | null;
@@ -21,9 +22,12 @@ interface ChatState {
   searchQuery: string;
   networkStatus: NetworkStatus;
   isSyncing: boolean;
+  /** Phase 3: live RTDB presence map keyed by kivoId. */
+  presenceMap: Record<string, { online: boolean; lastSeen: string }>;
   setConversations: (conversations: Conversation[]) => void;
   addConversation: (conversation: Conversation) => void;
   updateConversation: (id: string, data: Partial<Conversation>) => void;
+  setPresence: (userId: string, online: boolean, lastSeen: string) => void;
   setActiveConversationId: (id: string | null) => void;
   setMessages: (messages: Message[]) => void;
   prependMessages: (messages: Message[]) => void;
@@ -60,7 +64,12 @@ const initialState = {
   searchQuery: '',
   networkStatus: 'online' as NetworkStatus,
   isSyncing: false,
+  presenceMap: {} as Record<string, { online: boolean; lastSeen: string }>,
 };
+
+function isOnline(): boolean {
+  return typeof navigator !== 'undefined' ? navigator.onLine : true;
+}
 
 export const useChatStore = create<ChatState>()((set, get) => ({
   ...initialState,
@@ -164,12 +173,22 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       ),
     })),
   setNetworkStatus: (networkStatus) => set({ networkStatus }),
+  setPresence: (userId, online, lastSeen) =>
+    set((state) => ({
+      presenceMap: { ...state.presenceMap, [userId]: { online, lastSeen } },
+      // Mirror onto conversation otherUser so headers/list stay live too.
+      conversations: state.conversations.map((c) =>
+        c.otherUser?.id === userId
+          ? { ...c, otherUser: { ...c.otherUser, online, lastSeen } }
+          : c
+      ),
+    })),
   syncQueuedMessages: async () => {
     const state = get();
     if (state.isSyncing) return;
-    if (!isSocketConnected()) return;
+    if (!isOnline()) return;
 
-    let queued: { tempId: string; conversationId: string; content: string; type: string; replyToId: string | null; attachmentId?: string }[];
+    let queued: QueuedMessage[];
     try {
       queued = await getAllQueuedMessages();
     } catch {
@@ -178,23 +197,35 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     if (queued.length === 0) return;
 
     set({ isSyncing: true });
-    const socket = getSocket();
+    const { user } = useAuthStore.getState();
+    if (!user) {
+      set({ isSyncing: false });
+      return;
+    }
 
     for (const msg of queued) {
       // Update local status to 'sending'
       get().setMessageStatus(msg.tempId, 'sending');
 
-      const emitPayload: Record<string, unknown> = {
-        conversationId: msg.conversationId,
-        content: msg.content,
-        type: msg.type,
-        replyToId: msg.replyToId,
-      };
-      if (msg.attachmentId) emitPayload.attachmentId = msg.attachmentId;
-
-      socket.emit('message:send', emitPayload);
-      // Remove from IndexedDB (will be re-saved as 'failed' if socket fails)
-      try { await removeQueuedMessage(msg.tempId); } catch { /* ignore */ }
+      try {
+        const conv = get().conversations.find((c) => c.id === msg.conversationId);
+        const recipientId = conv?.participants?.find((p) => p !== user.id);
+        await firestoreSendMessage({
+          conversationId: msg.conversationId,
+          sender: user,
+          recipientId,
+          content: msg.content,
+          type: msg.type,
+          replyToId: msg.replyToId,
+          replyTo: msg.replyTo ?? null,
+          attachments: msg.attachments ?? [],
+          tempId: msg.tempId,
+        });
+        // Remove from IndexedDB after successful Firestore write
+        try { await removeQueuedMessage(msg.tempId); } catch { /* ignore */ }
+      } catch {
+        get().setMessageStatus(msg.tempId, 'failed');
+      }
     }
 
     set({ isSyncing: false });

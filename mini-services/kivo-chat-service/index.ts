@@ -3,6 +3,7 @@ import { Server } from 'socket.io'
 import { db } from '../../src/lib/db'
 import * as jose from 'jose'
 import { sendPushToUser, type PushPayload } from '../../src/lib/fcm-send'
+import { verifyFirebaseIdToken } from '../../src/lib/firebase-admin'
 
 // ---------------------------------------------------------------------------
 // JWT Verification (shared secret with main app)
@@ -15,6 +16,18 @@ if (!JWT_SECRET || JWT_SECRET.length < 32) {
 const secretKey = new TextEncoder().encode(JWT_SECRET)
 
 async function verifySocketToken(token: string): Promise<string | null> {
+  // 1) Firebase ID token (primary)
+  const fb = await verifyFirebaseIdToken(token)
+  if (fb) {
+    if (!fb.email) return null
+    const user = await db.user.findFirst({
+      where: { email: { equals: fb.email, mode: 'insensitive' } },
+      select: { id: true },
+    })
+    return user?.id ?? null
+  }
+
+  // 2) Legacy JWT (existing sessions during migration)
   try {
     const { payload } = await jose.jwtVerify(token, secretKey, { algorithms: ['HS256'] })
     const userId = (payload as { userId?: string }).userId ?? null

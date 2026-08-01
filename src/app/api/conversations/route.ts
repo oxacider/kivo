@@ -1,5 +1,6 @@
 import { db } from '@/lib/db';
 import { getAuthUser, errorResponse } from '@/lib/auth';
+import { upsertFirestoreConversation } from '@/lib/firestore-admin';
 
 export async function GET(request: Request) {
   try {
@@ -60,6 +61,9 @@ export async function POST(request: Request) {
         user2: { select: { id: true, displayName: true, username: true, avatar: true, online: true, lastSeen: true } },
       },
     });
+
+    // Phase 2: mirror the conversation into Firestore so clients can subscribe.
+    await upsertFirestoreConversation(conversation.id, conversation.user1Id, conversation.user2Id);
 
     const otherUser = conversation.user1Id === user.id ? conversation.user2 : conversation.user1;
     return Response.json({ success: true, data: { ...conversation, otherUser } }, { status: 201 });

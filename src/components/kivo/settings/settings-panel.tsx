@@ -7,6 +7,7 @@ import { useUIStore } from '@/stores/ui-store';
 import { useChatStore } from '@/stores/chat-store';
 import { useFriendsStore } from '@/stores/friends-store';
 import { api } from '@/lib/api';
+import { unblockUser } from '@/lib/friends-service';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
@@ -16,6 +17,7 @@ import { useTheme } from 'next-themes';
 import { ArrowLeft, Loader2, User as UserIcon, Palette, Bell, Shield, LogOut, UserX } from 'lucide-react';
 import { toast } from 'sonner';
 import { disconnectSocket } from '@/lib/socket';
+import { disconnectPresence } from '@/lib/presence';
 import Image from 'next/image';
 import type { User } from '@/types';
 
@@ -25,6 +27,7 @@ export function SettingsPanel() {
   const { user, token, setUser, logout } = useAuthStore();
   const { setView, setSettingsOpen } = useUIStore();
   const { theme, setTheme } = useTheme();
+  const { blockedUsers, removeBlockedUser } = useFriendsStore();
   const [section, setSection] = useState<'main' | 'edit-profile' | 'notifications' | 'privacy' | 'blocked'>('main');
   const [notifSettings, setNotifSettings] = useState({ messages: true, friendRequests: true });
   const [privacySettings, setPrivacySettings] = useState(() => ({
@@ -32,7 +35,6 @@ export function SettingsPanel() {
     showLastSeen: user?.showLastSeen ?? true,
     showReadReceipts: user?.showReadReceipts ?? true,
   }));
-  const [blockedUsers, setBlockedUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({ displayName: user?.displayName || '', username: user?.username || '', bio: user?.bio || '', status: user?.status || '' });
 
@@ -61,6 +63,8 @@ export function SettingsPanel() {
 
   const handleLogout = () => {
     disconnectSocket();
+    // Phase 3: flip presence offline explicitly (RTDB onDisconnect is the backup).
+    if (user?.id && !token?.startsWith('demo-')) disconnectPresence(user.id);
     logout();
     setSettingsOpen(false);
     setView('welcome');
@@ -244,9 +248,10 @@ export function SettingsPanel() {
                 </div>
                 <button
                   onClick={async () => {
+                    if (!user) return;
                     try {
-                      await api('/blocks/unblock', { token, body: { userId: u.id } });
-                      setBlockedUsers((prev: any[]) => prev.filter((b: any) => b.id !== u.id));
+                      await unblockUser(user.id, u.id);
+                      removeBlockedUser(u.id);
                       toast.success('User unblocked');
                     } catch (err: any) { toast.error(err.message); }
                   }}

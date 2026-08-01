@@ -1,9 +1,12 @@
 import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
+import { getAuth, type Auth } from 'firebase/auth';
 import { getMessaging, isSupported, type Messaging } from 'firebase/messaging';
+import { getFirestore, type Firestore } from 'firebase/firestore';
+import { getDatabase, type Database } from 'firebase/database';
 
 /**
- * KIVO Firebase Configuration
- * Only FCM is initialized — no Firebase Auth or Firestore on the client.
+ * KIVO Firebase Configuration.
+ * Initializes the client-side Firebase app for Auth and FCM.
  */
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || '',
@@ -24,7 +27,31 @@ if (typeof window !== 'undefined' && !getApps().length) {
   app = initializeApp(firebaseConfig);
 }
 
+export const auth: Auth = getAuth(app);
+
 export { app };
+
+let firestore: Firestore | null = null;
+
+/**
+ * Lazy Firestore instance (client-side chat layer — Phase 2).
+ * Only call from the client (components / stores).
+ */
+export function getFirestoreInstance(): Firestore {
+  if (!firestore) firestore = getFirestore(app);
+  return firestore;
+}
+
+let database: Database | null = null;
+
+/**
+ * Lazy Realtime Database instance (client-side presence/typing — Phase 3).
+ * Only call from the client (components / hooks).
+ */
+export function getDatabaseInstance(): Database {
+  if (!database) database = getDatabase(app);
+  return database;
+}
 
 /**
  * Async messaging instance.

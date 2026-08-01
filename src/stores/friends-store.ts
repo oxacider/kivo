@@ -14,11 +14,15 @@ interface FriendsState {
   searchResults: User[];
   friendStatuses: FriendStatusMap;
   mutualCounts: { [userId: string]: number };
+  /** Phase 4: users blocked by me (Firestore blocks collection). */
+  blockedUsers: User[];
   isSearching: boolean;
   isLoading: boolean;
   setFriends: (friends: User[]) => void;
   addFriend: (friend: User) => void;
   removeFriend: (userId: string) => void;
+  /** Phase 3: live RTDB presence — patch a friend's online/lastSeen. */
+  applyPresence: (userId: string, online: boolean, lastSeen: string) => void;
   setPendingRequests: (requests: Friendship[]) => void;
   addPendingRequest: (request: Friendship) => void;
   updateRequestStatus: (id: string, status: string) => void;
@@ -31,6 +35,10 @@ interface FriendsState {
   setIsLoading: (loading: boolean) => void;
   setFriendStatus: (userId: string, status: FriendRelationStatus) => void;
   setMutualCount: (userId: string, count: number) => void;
+  /** Phase 4: Firestore blocks — set the full blocked list. */
+  setBlockedUsers: (users: User[]) => void;
+  /** Phase 4: remove one blocked user (after unblock). */
+  removeBlockedUser: (userId: string) => void;
   reset: () => void;
 }
 
@@ -41,6 +49,7 @@ const initialState = {
   searchResults: [] as User[],
   friendStatuses: {} as FriendStatusMap,
   mutualCounts: {} as { [userId: string]: number },
+  blockedUsers: [] as User[],
   isSearching: false,
   isLoading: false,
 };
@@ -57,6 +66,12 @@ export const useFriendsStore = create<FriendsState>()((set) => ({
   removeFriend: (userId) =>
     set((state) => ({
       friends: state.friends.filter((f) => f.id !== userId),
+    })),
+  applyPresence: (userId, online, lastSeen) =>
+    set((state) => ({
+      friends: state.friends.map((f) =>
+        f.id === userId ? { ...f, online, lastSeen } : f
+      ),
     })),
   setPendingRequests: (pendingRequests) => set({ pendingRequests }),
   addPendingRequest: (request) =>
@@ -94,6 +109,11 @@ export const useFriendsStore = create<FriendsState>()((set) => ({
   setMutualCount: (userId, count) =>
     set((state) => ({
       mutualCounts: { ...state.mutualCounts, [userId]: count },
+    })),
+  setBlockedUsers: (blockedUsers) => set({ blockedUsers }),
+  removeBlockedUser: (userId) =>
+    set((state) => ({
+      blockedUsers: state.blockedUsers.filter((u) => u.id !== userId),
     })),
   reset: () => set(initialState),
 }));

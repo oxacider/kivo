@@ -1,5 +1,6 @@
 import { db } from '@/lib/db';
 import { signToken, verifyToken } from '@/lib/jwt';
+import { verifyFirebaseIdToken } from '@/lib/firebase-admin';
 import type { User } from '@/types';
 
 /* ------------------------------------------------------------------ */
@@ -63,27 +64,46 @@ export async function extractUserId(token: string): Promise<string | null> {
   return payload.userId;
 }
 
+const USER_SELECT = {
+  id: true, email: true, displayName: true, username: true,
+  avatar: true, bio: true, status: true, online: true,
+  lastSeen: true, theme: true, emailVerified: true,
+  showOnline: true, showLastSeen: true, showReadReceipts: true,
+  createdAt: true, updatedAt: true,
+};
+
 /**
  * Authenticate a request and return the full user object.
  * Strips the password hash automatically.
+ *
+ * Accepts:
+ *  1. Firebase ID tokens (primary — issued by the client login flow)
+ *  2. Legacy custom JWTs (existing sessions during migration)
  */
 export async function getAuthUser(request: Request): Promise<User | null> {
   const auth = request.headers.get('authorization');
   if (!auth?.startsWith('Bearer ')) return null;
 
   const token = auth.slice(7);
+
+  // 1) Firebase ID token
+  const fb = await verifyFirebaseIdToken(token);
+  if (fb) {
+    if (!fb.email) return null;
+    const user = await db.user.findFirst({
+      where: { email: { equals: fb.email, mode: 'insensitive' } },
+      select: USER_SELECT,
+    });
+    return user as User | null;
+  }
+
+  // 2) Legacy JWT (existing sessions during migration)
   const userId = await extractUserId(token);
   if (!userId) return null;
 
   const user = await db.user.findUnique({
     where: { id: userId },
-    select: {
-      id: true, email: true, displayName: true, username: true,
-      avatar: true, bio: true, status: true, online: true,
-      lastSeen: true, theme: true, emailVerified: true,
-      showOnline: true, showLastSeen: true, showReadReceipts: true,
-      createdAt: true, updatedAt: true,
-    },
+    select: USER_SELECT,
   });
   return user as User | null;
 }

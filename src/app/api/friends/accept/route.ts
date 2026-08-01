@@ -1,5 +1,6 @@
 import { db } from '@/lib/db';
 import { getAuthUser, errorResponse } from '@/lib/auth';
+import { upsertFirestoreConversation } from '@/lib/firestore-admin';
 
 export async function POST(request: Request) {
   try {
@@ -23,11 +24,15 @@ export async function POST(request: Request) {
     const existing = await db.conversation.findFirst({
       where: { user1Id: id1, user2Id: id2 },
     });
-    if (!existing) {
-      await db.conversation.create({
+    let conversation = existing;
+    if (!conversation) {
+      conversation = await db.conversation.create({
         data: { user1Id: id1, user2Id: id2 },
       });
     }
+
+    // Phase 2: mirror the conversation into Firestore so both clients can subscribe.
+    await upsertFirestoreConversation(conversation.id, conversation.user1Id, conversation.user2Id);
 
     return Response.json({ success: true, data: updated });
   } catch (err) {

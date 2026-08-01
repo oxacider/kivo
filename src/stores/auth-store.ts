@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { signOut } from 'firebase/auth';
+import { auth } from '@/lib/firebase';
 import { enableNotifications, disableNotifications } from '@/lib/notifications';
-import { api } from '@/lib/api';
 import type { User } from '@/types';
 
 interface AuthState {
@@ -32,12 +33,11 @@ export const useAuthStore = create<AuthState>()(
 
       logout: () => {
         const { token } = get();
-        // Server-side: invalidate JWT + mark offline
         if (token && !token.startsWith('demo-')) {
-          api('/auth/logout', { token, method: 'POST', body: {} }).catch(() => {});
+          // End the Firebase session (replaces the old server-side JWT invalidation)
+          signOut(auth).catch(() => {});
+          disableNotifications().catch(() => {});
         }
-        // Client-side: remove FCM token
-        disableNotifications().catch(() => {});
         set({ user: null, token: null });
       },
     }),

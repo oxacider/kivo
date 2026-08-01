@@ -10,8 +10,18 @@ import { useAuthStore } from '@/stores/auth-store';
 import { useFriendsStore, type FriendRelationStatus } from '@/stores/friends-store';
 import { useChatStore } from '@/stores/chat-store';
 import { api } from '@/lib/api';
+import { getOrCreateConversation } from '@/lib/chat-service';
+import {
+  sendFriendRequest,
+  acceptFriendRequest,
+  declineFriendRequest,
+  cancelFriendRequest,
+  removeFriend as removeFriendService,
+  blockUser,
+  getFriendStatusWith,
+} from '@/lib/friends-service';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import type { User as UserType, Friendship } from '@/types';
+import type { User as UserType } from '@/types';
 
 function getInitials(name: string) {
   return name.slice(0, 2).toUpperCase();
@@ -37,10 +47,9 @@ export function FriendsPage() {
   const { user, token } = useAuthStore();
   const {
     friends, pendingRequests, sentRequests, friendStatuses, mutualCounts,
-    setFriends, setPendingRequests, setSentRequests, removeFriend, removeRequest,
-    removeSentRequest, addSentRequest, addFriend, setFriendStatus, setMutualCount,
+    removeFriend, removeRequest, removeSentRequest, addSentRequest, setFriendStatus, setMutualCount,
   } = useFriendsStore();
-  const { setActiveConversationId, addConversation } = useChatStore();
+  const { setActiveConversationId } = useChatStore();
 
   const [activeTab, setActiveTab] = useState<FriendTab>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -49,23 +58,6 @@ export function FriendsPage() {
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isDemo = token?.startsWith('demo-');
-
-  // Load data on mount
-  useEffect(() => {
-    if (!token || isDemo) return;
-    (async () => {
-      try {
-        const [friendsList, requestsList, sentList]: any[] = await Promise.all([
-          api('/friends/list', { token }),
-          api('/friends/requests', { token }),
-          api('/friends/sent', { token }),
-        ]);
-        setFriends(friendsList);
-        setPendingRequests(requestsList);
-        setSentRequests(sentList);
-      } catch { /* ignore */ }
-    })();
-  }, [token, isDemo, setFriends, setPendingRequests, setSentRequests]);
 
   const onlineFriends = useMemo(() => friends.filter((f) => f.online), [friends]);
 
@@ -77,8 +69,12 @@ export function FriendsPage() {
   }, [activeTab, friends, onlineFriends, searchQuery]);
 
   useEffect(() => {
-    if (activeTab !== 'add' || !searchQuery.trim() || isDemo) { setSearchResults([]); return; }
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    if (activeTab !== 'add' || !searchQuery.trim() || isDemo) {
+      // Defer the clear so we don't call setState synchronously in the effect body.
+      searchTimeoutRef.current = setTimeout(() => setSearchResults([]), 0);
+      return () => { if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current); };
+    }
     searchTimeoutRef.current = setTimeout(async () => {
       try {
         setSearching(true);
@@ -92,8 +88,9 @@ export function FriendsPage() {
   const getFriendStatus = (userId: string): FriendRelationStatus => friendStatuses[userId] || 'none';
 
   const handleRemoveFriend = async (friendId: string) => {
+    if (!user) return;
     try {
-      await api('/friends/remove', { token, method: 'POST', body: { userId: friendId } });
+      await removeFriendService(user.id, friendId);
       removeFriend(friendId);
       setFriendStatus(friendId, 'none');
       toast.success('Friend removed');
@@ -101,55 +98,57 @@ export function FriendsPage() {
   };
 
   const handleAcceptRequest = async (requestId: string) => {
+    if (!user) return;
     try {
-      const result: any = await api('/friends/accept', { token, method: 'POST', body: { requestId } });
+      await acceptFriendRequest(requestId, user.id);
       removeRequest(requestId);
-      if (result?.conversation) addConversation(result.conversation);
-      // Refresh friends list
-      const updatedFriends = await api<UserType[]>('/friends/list', { token });
-      setFriends(updatedFriends);
       toast.success('Friend request accepted');
     } catch (err: any) { toast.error(err.message || 'Failed to accept'); }
   };
 
   const handleDeclineRequest = async (requestId: string) => {
+    if (!user) return;
     try {
-      await api('/friends/decline', { token, method: 'POST', body: { requestId } });
+      await declineFriendRequest(requestId, user.id);
       removeRequest(requestId);
       toast.success('Request declined');
     } catch (err: any) { toast.error(err.message || 'Failed to decline'); }
   };
 
   const handleCancelRequest = async (requestId: string) => {
+    if (!user) return;
     try {
-      await api('/friends/cancel', { token, method: 'POST', body: { requestId } });
+      await cancelFriendRequest(requestId, user.id);
       removeSentRequest(requestId);
       toast.success('Request cancelled');
     } catch (err: any) { toast.error(err.message || 'Failed to cancel'); }
   };
 
-  const handleSendRequest = async (targetId: string) => {
+  const handleSendRequest = async (target: UserType) => {
+    if (!user) return;
     try {
-      const result = await api<Friendship>('/friends/request', { token, method: 'POST', body: { receiverId: targetId } });
+      const result = await sendFriendRequest(user, target);
       addSentRequest(result);
-      setFriendStatus(targetId, 'pending_sent');
+      setFriendStatus(target.id, 'pending_sent');
       toast.success('Friend request sent');
     } catch (err: any) { toast.error(err.message || 'Failed to send request'); }
   };
 
-  const handleBlockUser = async (targetId: string, name: string) => {
+  const handleBlockUser = async (target: UserType) => {
+    if (!user) return;
     try {
-      await api('/blocks/block', { token, method: 'POST', body: { userId: targetId } });
-      removeFriend(targetId);
-      setFriendStatus(targetId, 'blocked');
-      toast.success(`${name} has been blocked`);
+      await blockUser(user.id, { id: target.id, displayName: target.displayName, username: target.username, avatar: target.avatar });
+      removeFriend(target.id);
+      setFriendStatus(target.id, 'blocked');
+      toast.success(`${target.displayName} has been blocked`);
     } catch (err: any) { toast.error(err.message || 'Failed to block user'); }
   };
 
   const handleStartChat = async (friendId: string) => {
+    if (!user) return;
     try {
-      const conv = await api<{ id: string }>('/conversations', { token, method: 'POST', body: { userId: friendId } });
-      setActiveConversationId(conv.id);
+      const convId = await getOrCreateConversation(user.id, friendId);
+      setActiveConversationId(convId);
     } catch (err: any) { toast.error(err.message || 'Failed to start chat'); }
   };
 
@@ -174,7 +173,7 @@ export function FriendsPage() {
     }
     return (
       <button
-        onClick={() => handleSendRequest(targetUser.id)}
+        onClick={() => handleSendRequest(targetUser)}
         className="flex items-center gap-1 text-[11px] font-medium text-primary hover:bg-primary/10 px-2.5 py-1 rounded-lg transition-colors"
       >
         <UserPlus size={12} /> Add
@@ -183,14 +182,14 @@ export function FriendsPage() {
     );
   };
 
-  // Load friend statuses and mutual counts for search results
+  // Load friend statuses and mutual counts for search results (Firestore reads)
   useEffect(() => {
-    if (activeTab !== 'add' || searchResults.length === 0 || !token || isDemo) return;
+    if (activeTab !== 'add' || searchResults.length === 0 || !user || isDemo) return;
     (async () => {
       const statuses = await Promise.all(
         searchResults.map(async (u) => {
           try {
-            return await api<{ status: FriendRelationStatus; mutualCount: number }>(`/friends/status?userId=${u.id}`, { token });
+            return await getFriendStatusWith(user.id, u.id);
           } catch { return null; }
         })
       );
@@ -201,7 +200,7 @@ export function FriendsPage() {
         }
       });
     })();
-  }, [activeTab, searchResults, token, isDemo, setFriendStatus, setMutualCount]);
+  }, [activeTab, searchResults, user, isDemo, setFriendStatus, setMutualCount]);
 
   const tabsWithCounts = friendTabs.map((tab) => {
     let count = 0;
@@ -265,7 +264,7 @@ export function FriendsPage() {
                   <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                     <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleStartChat(friend.id)}
                       className="p-2 rounded-xl bg-surface-2 hover:bg-primary hover:text-primary-foreground text-muted-foreground transition-colors"><MessageSquare size={16} /></motion.button>
-                    <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleBlockUser(friend.id, friend.displayName)}
+                    <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleBlockUser(friend)}
                       className="p-2 rounded-xl bg-surface-2 hover:bg-destructive hover:text-white text-muted-foreground transition-colors"><Shield size={16} /></motion.button>
                     <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={() => handleRemoveFriend(friend.id)}
                       className="p-2 rounded-xl bg-surface-2 hover:bg-red-500 hover:text-white text-muted-foreground transition-colors"><UserMinus size={16} /></motion.button>

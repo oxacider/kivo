@@ -5,6 +5,9 @@ import { motion } from 'framer-motion';
 import { useAuthStore } from '@/stores/auth-store';
 import { useUIStore } from '@/stores/ui-store';
 import { api } from '@/lib/api';
+import { getOrCreateConversation } from '@/lib/chat-service';
+import { getFriendStatusWith, blockUser } from '@/lib/friends-service';
+import { subscribePresence } from '@/lib/presence';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ArrowLeft, MessageCircle, UserX } from 'lucide-react';
 import { toast } from 'sonner';
@@ -32,32 +35,41 @@ export function UserProfile({ userId }: Props) {
         const u = await api<User>('/users/' + userId, { token });
         setProfile(u);
 
-        // Check friendship
-        try {
-          const friends = await api<User[]>('/friends/list', { token });
-          setIsFriend(friends.some((f) => f.id === userId));
-        } catch { /* not friends */ }
-
-        // Check blocked
-        try {
-          const blocked = await api<User[]>('/blocks/list', { token });
-          setIsBlocked(blocked.some((b) => b.id === userId));
-        } catch { /* not blocked */ }
+        // Phase 4: friendship + block status read straight from Firestore.
+        if (me?.id) {
+          try {
+            const { status } = await getFriendStatusWith(me.id, userId);
+            setIsFriend(status === 'accepted');
+            setIsBlocked(status === 'blocked');
+          } catch { /* no relationship */ }
+        }
       } catch (err: any) { toast.error(err.message); }
       setLoading(false);
     })();
   }, [token, userId]);
 
+  // Phase 3: live online/lastSeen via RTDB presence.
+  useEffect(() => {
+    if (!token || token.startsWith('demo-')) return;
+    const unsub = subscribePresence(userId, (presence) => {
+      if (!presence) return;
+      setProfile((prev) => (prev ? { ...prev, online: presence.online, lastSeen: presence.lastSeen } : prev));
+    });
+    return () => unsub();
+  }, [token, userId]);
+
   const startChat = async () => {
+    if (!me) return;
     try {
-      const conv = await api<any>('/conversations', { token, body: { userId } });
+      await getOrCreateConversation(me.id, userId);
       setView('chat');
     } catch (err: any) { toast.error(err.message); }
   };
 
   const blockAction = async () => {
+    if (!me) return;
     try {
-      await api('/blocks/block', { token, body: { userId } });
+      await blockUser(me.id, { id: userId, displayName: profile?.displayName || '', username: profile?.username || '', avatar: profile?.avatar || '' });
       toast.success('User blocked');
       setView('chat');
     } catch (err: any) { toast.error(err.message); }

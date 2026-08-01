@@ -1,0 +1,24 @@
+{
+  "rules": {
+    "mapping": {
+      "$firebaseUid": {
+        ".read": "auth != null",
+        ".write": "auth != null && auth.uid === $firebaseUid"
+      }
+    },
+    "presence": {
+      "$kivoId": {
+        ".read": "auth != null",
+        ".write": "auth != null && root.child('mapping/' + auth.uid).val() === $kivoId"
+      }
+    },
+    "typing": {
+      "$conversationId": {
+        "$kivoId": {
+          ".read": "auth != null",
+          ".write": "auth != null && root.child('mapping/' + auth.uid).val() === $kivoId"
+        }
+      }
+    }
+  }
+}

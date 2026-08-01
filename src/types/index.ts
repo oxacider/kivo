@@ -53,6 +53,10 @@ export interface Conversation {
   lastMessage?: Message;
   otherUser?: User;
   unreadCount?: number;
+  /** Firestore-only: participant KIVO user ids (Phase 2) */
+  participants?: string[];
+  /** Firestore-only: kivoUserId → last-read ISO timestamp (Phase 2) */
+  readReceipts?: Record<string, string>;
 }
 
 export interface Friendship {

@@ -2,11 +2,13 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
+import { onAuthStateChanged, reload, sendEmailVerification } from 'firebase/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuthStore } from '@/stores/auth-store';
 import { useUIStore } from '@/stores/ui-store';
 import { api } from '@/lib/api';
+import { auth } from '@/lib/firebase';
 import { Loader2, Mail, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
 import Image from 'next/image';
@@ -22,6 +24,41 @@ export function VerifyEmailForm() {
   const [countdown, setCountdown] = useState(0);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoSentRef = useRef(false);
+
+  /**
+   * Firebase path: reload the Firebase user to detect email verification,
+   * then sync the verified state into the DB (no legacy code required).
+   */
+  const verifyWithFirebase = async (): Promise<boolean> => {
+    const fbu = auth.currentUser;
+    if (!fbu) return false;
+    try {
+      await reload(fbu);
+    } catch {
+      return false;
+    }
+    if (!fbu.emailVerified) return false;
+    try {
+      await api('/auth/verify-email', { token, body: {} });
+    } catch {
+      // Best-effort sync — Firebase is the source of truth.
+    }
+    setVerified(true);
+    if (user) setUser({ ...user, emailVerified: true });
+    return true;
+  };
+
+  // Firebase: send the verification email once when the view loads
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      if (u && !u.emailVerified && !autoSentRef.current) {
+        autoSentRef.current = true;
+        sendEmailVerification(u).catch(() => {});
+      }
+    });
+    return () => unsub();
+  }, []);
 
   // Auto-poll for verification status
   useEffect(() => {
@@ -29,6 +66,13 @@ export function VerifyEmailForm() {
     pollingRef.current = setInterval(async () => {
       if (!token) return;
       try {
+        // Firebase sessions: detect verification via reload()
+        if (auth.currentUser) {
+          const ok = await verifyWithFirebase();
+          if (ok && pollingRef.current) clearInterval(pollingRef.current);
+          return;
+        }
+        // Legacy sessions: poll the DB-backed /auth/me
         const me: any = await api('/auth/me', { token });
         if (me.emailVerified) {
           setVerified(true);
@@ -38,7 +82,7 @@ export function VerifyEmailForm() {
       } catch { /* ignore */ }
     }, 5000);
     return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
-  }, [token, verified, setUser]);
+  }, [token, verified, setUser, user]);
 
   // Countdown timer for resend
   useEffect(() => {
@@ -48,10 +92,21 @@ export function VerifyEmailForm() {
   }, [countdown]);
 
   const handleVerify = async () => {
-    const fullCode = code.join('');
-    if (fullCode.length !== 6) return;
     setLoading(true);
     try {
+      // Firebase sessions: reload() to detect verification
+      if (auth.currentUser) {
+        const ok = await verifyWithFirebase();
+        if (ok) {
+          toast.success('Email verified successfully!');
+        } else {
+          toast.info('Please click the verification link in your email first.');
+        }
+        return;
+      }
+      // Legacy sessions: verify with the 6-digit code
+      const fullCode = code.join('');
+      if (fullCode.length !== 6) return;
       await api('/auth/verify-email', { token, body: { code: fullCode } });
       setVerified(true);
       if (user) setUser({ ...user, emailVerified: true });
@@ -67,6 +122,14 @@ export function VerifyEmailForm() {
     if (countdown > 0 || !token) return;
     setResendLoading(true);
     try {
+      // Firebase sessions: resend the verification email
+      if (auth.currentUser) {
+        await sendEmailVerification(auth.currentUser);
+        setCountdown(60);
+        toast.success('Verification email sent! Check your inbox.');
+        return;
+      }
+      // Legacy sessions: request a new 6-digit code
       const data: any = await api('/auth/send-verification', { token, body: {} });
       if (data.code) setDevCode(data.code);
       setCode(['', '', '', '', '', '']);
@@ -97,20 +160,34 @@ export function VerifyEmailForm() {
     }
     // Auto-submit when all 6 digits entered
     if (newCode.every((c) => c !== '')) {
-      const fullCode = newCode.join('');
       setLoading(true);
-      api('/auth/verify-email', { token, body: { code: fullCode } })
-        .then(() => {
-          setVerified(true);
-          if (user) setUser({ ...user, emailVerified: true });
-          toast.success('Email verified successfully!');
-        })
-        .catch((err: any) => {
-          toast.error(err.message || 'Verification failed');
-          setCode(['', '', '', '', '', '']);
-          inputRefs.current[0]?.focus();
-        })
-        .finally(() => setLoading(false));
+      // Firebase sessions: reload() to detect verification (no code needed)
+      if (auth.currentUser) {
+        verifyWithFirebase()
+          .then((ok) => {
+            if (!ok) {
+              setCode(['', '', '', '', '', '']);
+              inputRefs.current[0]?.focus();
+            } else {
+              toast.success('Email verified successfully!');
+            }
+          })
+          .finally(() => setLoading(false));
+      } else {
+        const fullCode = newCode.join('');
+        api('/auth/verify-email', { token, body: { code: fullCode } })
+          .then(() => {
+            setVerified(true);
+            if (user) setUser({ ...user, emailVerified: true });
+            toast.success('Email verified successfully!');
+          })
+          .catch((err: any) => {
+            toast.error(err.message || 'Verification failed');
+            setCode(['', '', '', '', '', '']);
+            inputRefs.current[0]?.focus();
+          })
+          .finally(() => setLoading(false));
+      }
     }
   };
 
@@ -122,18 +199,32 @@ export function VerifyEmailForm() {
       inputRefs.current[5]?.focus();
       // Auto-submit
       setLoading(true);
-      api('/auth/verify-email', { token, body: { code: pasted } })
-        .then(() => {
-          setVerified(true);
-          if (user) setUser({ ...user, emailVerified: true });
-          toast.success('Email verified successfully!');
-        })
-        .catch((err: any) => {
-          toast.error(err.message || 'Verification failed');
-          setCode(['', '', '', '', '', '']);
-          inputRefs.current[0]?.focus();
-        })
-        .finally(() => setLoading(false));
+      // Firebase sessions: reload() to detect verification (no code needed)
+      if (auth.currentUser) {
+        verifyWithFirebase()
+          .then((ok) => {
+            if (!ok) {
+              setCode(['', '', '', '', '', '']);
+              inputRefs.current[0]?.focus();
+            } else {
+              toast.success('Email verified successfully!');
+            }
+          })
+          .finally(() => setLoading(false));
+      } else {
+        api('/auth/verify-email', { token, body: { code: pasted } })
+          .then(() => {
+            setVerified(true);
+            if (user) setUser({ ...user, emailVerified: true });
+            toast.success('Email verified successfully!');
+          })
+          .catch((err: any) => {
+            toast.error(err.message || 'Verification failed');
+            setCode(['', '', '', '', '', '']);
+            inputRefs.current[0]?.focus();
+          })
+          .finally(() => setLoading(false));
+      }
     }
   };
 

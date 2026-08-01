@@ -4,7 +4,6 @@ import { useEffect, useRef, useState, useCallback, useMemo, Fragment } from 'rea
 import { motion, AnimatePresence } from 'framer-motion';
 import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
-import { api } from '@/lib/api';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { format, formatDistanceToNow } from 'date-fns';
@@ -16,8 +15,20 @@ import {
 } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
-import { getSocket, isSocketConnected } from '@/lib/socket';
 import { saveQueuedMessage } from '@/lib/offline-queue';
+import { setTypingState, subscribeTyping } from '@/lib/presence';
+import { blockUser } from '@/lib/friends-service';
+import {
+  sendMessage as firestoreSendMessage,
+  editMessage as firestoreEditMessage,
+  deleteMessage as firestoreDeleteMessage,
+  toggleReaction,
+  subscribeMessages,
+  fsMessageToMessage,
+  loadOlderMessages,
+  deriveMessageStatus,
+  markConversationRead,
+} from '@/lib/chat-service';
 import type { Message, Reaction, PendingImage, MediaAttachment, QueuedMessage } from '@/types';
 
 function getInitials(name: string) { return name.slice(0, 2).toUpperCase(); }
@@ -303,7 +314,7 @@ function UploadProgressBar({ progress }: { progress: number }) {
 }
 
 export function ConversationView() {
-  const { activeConversationId, conversations, messages, setMessages, prependMessages, addMessage, updateMessage, removeMessage, typingUsers, setActiveConversationId, updateConversation, addReaction, removeReaction, setMessageStatus, hasMoreMessages, isLoadingMoreMessages, setLoadingMoreMessages, setHasMoreMessages, networkStatus, isSyncing } = useChatStore();
+  const { activeConversationId, conversations, messages, prependMessages, addMessage, updateMessage, typingUsers, setActiveConversationId, updateConversation, addReaction, removeReaction, setMessageStatus, setTyping, clearTypingForConversation, hasMoreMessages, isLoadingMoreMessages, setLoadingMoreMessages, setHasMoreMessages, networkStatus, isSyncing } = useChatStore();
   const { user, token } = useAuthStore();
   const [input, setInput] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
@@ -355,10 +366,19 @@ export function ConversationView() {
   }, [hasMoreMessages, isLoadingMoreMessages]);
 
   useEffect(() => {
+    // Reset per-conversation pagination state when the conversation changes.
+    // reachedStartRef / loadMoreTriggeredRef are owned by this effect only
+    // (never written from another effect — react-hooks/immutability).
+    if (prevConvIdRef.current !== activeConversationId) {
+      prevConvIdRef.current = activeConversationId;
+      reachedStartRef.current = false;
+      loadMoreTriggeredRef.current = false;
+    }
     if (!activeConversationId || !token || !hasMoreMessages || isLoadingMoreMessages) return;
     const convId = activeConversationId;
-    const tok = token;
-    const firstMsg = useChatStore.getState().messages[0];
+    const firstMsg = useChatStore
+      .getState()
+      .messages.find((m) => m.conversationId === convId);
     if (!firstMsg || firstMsg.id.startsWith('temp-')) return;
     const prevHeight = scrollRef.current?.scrollHeight ?? 0;
     let cancelled = false;
@@ -366,13 +386,11 @@ export function ConversationView() {
     loadMoreTriggeredRef.current = false;
     (async () => {
       try {
-        const result = await api<{ messages: Message[]; hasMore: boolean }>(
-          '/conversations/' + convId + '/messages?before=' + encodeURIComponent(firstMsg.createdAt),
-          { token: tok }
-        );
+        const result = await loadOlderMessages(convId, firstMsg.createdAt);
         if (!cancelled) {
-          prependMessages(result.messages);
+          prependMessages(result.messages.map((m) => fsMessageToMessage(m, convId)));
           setHasMoreMessages(result.hasMore);
+          if (!result.hasMore) reachedStartRef.current = true;
           requestAnimationFrame(() => {
             const el = scrollRef.current;
             if (el) el.scrollTop = el.scrollHeight - prevHeight;
@@ -387,100 +405,116 @@ export function ConversationView() {
     return () => { cancelled = true; };
   }, [loadMoreTick, activeConversationId, token]);
 
-  // Socket listeners for delivered, read, reactions, and optimistic message replacement
-  useEffect(() => {
-    if (!token || token.startsWith('demo-')) return;
-    const socket = getSocket();
-
-    const onDelivered = (data: { messageId: string; conversationId: string; status: string }) => {
-      if (data.conversationId !== activeConversationId) return;
-      updateMessage(data.messageId, { status: 'delivered' });
-    };
-
-    const onRead = (data: { conversationId: string; userId: string }) => {
-      if (data.conversationId !== activeConversationId) return;
-      // Batch: mark all sent/delivered/sending messages as read in one update
-      const msgs = useChatStore.getState().messages;
-      const updates = msgs
-        .filter(m => m.senderId === user?.id && (m.status === 'sent' || m.status === 'delivered' || m.status === 'sending' || m.status === 'queued'))
-        .map(m => ({ id: m.id, status: 'read' as const }));
-      if (updates.length > 0) {
-        useChatStore.setState((state) => ({
-          messages: state.messages.map((m) => {
-            const u = updates.find((up) => up.id === m.id);
-            return u ? { ...m, status: u.status } : m;
-          }),
-        }));
-      }
-    };
-
-    const onNew = (msg: any) => {
-      // Replace optimistic sending message with the real server message
-      const msgs = useChatStore.getState().messages;
-      // For text messages: match by content
-      const textMatch = msgs.find(m => (m.status === 'sending' || m.status === 'queued') && m.conversationId === msg.conversationId && m.content === msg.content && m.senderId === msg.senderId && !m.attachments?.length);
-      // For image messages: match by type + sender + conversation + no real id
-      const imageMatch = msgs.find(m => (m.status === 'sending' || m.status === 'queued') && m.conversationId === msg.conversationId && m.type === 'image' && m.senderId === msg.senderId && m.id.startsWith('temp-'));
-      const sending = textMatch || imageMatch;
-      if (sending && sending.id.startsWith('temp-')) {
-        // Remove the temp message, the real one will be added by the store's addMessage
-        useChatStore.getState().removeMessage(sending.id);
-      }
-    };
-
-    const onReaction = (data: any) => {
-      if (data.removed) {
-        removeReaction(data.messageId, data.userId, data.emoji);
-      } else {
-        addReaction(data.messageId, data);
-      }
-    };
-
-    socket.on('message:delivered', onDelivered);
-    socket.on('message:read', onRead);
-    socket.on('message:new', onNew);
-    socket.on('reaction:update', onReaction);
-
-    return () => {
-      socket.off('message:delivered', onDelivered);
-      socket.off('message:read', onRead);
-      socket.off('message:new', onNew);
-      socket.off('reaction:update', onReaction);
-    };
-  }, [token, activeConversationId, user?.id, updateMessage, removeMessage, addReaction, removeReaction]);
-
   // Track whether this is the initial load for current conversation (for instant scroll)
   const initialLoadDoneRef = useRef(false);
+  /** True once the oldest page has been loaded (no older messages exist). */
+  const reachedStartRef = useRef(false);
+  /** One-shot toast guard for Firestore subscription errors per conversation. */
+  const msgErrorShownRef = useRef(false);
+  /** Tracks which conversation the per-conversation refs were last reset for. */
+  const prevConvIdRef = useRef<string | null>(null);
 
-  // Load latest 30 messages when conversation changes
+  /**
+   * Phase 2: Firestore messages subscription — replaces the legacy socket
+   * message events and the initial-load API call. Realtime edits, deletes,
+   * reactions and read receipts all flow through the message snapshot.
+   */
   useEffect(() => {
     if (!activeConversationId || !token) return;
     const isDemo = token.startsWith('demo-');
     if (isDemo) return;
-    initialLoadDoneRef.current = false;
+    const convId = activeConversationId;
     let cancelled = false;
-    (async () => {
-      try {
-        const result = await api<{ messages: Message[]; hasMore: boolean }>(
-          '/conversations/' + activeConversationId + '/messages',
-          { token }
-        );
-        if (!cancelled) {
-          setMessages(result.messages);
-          setHasMoreMessages(result.hasMore);
-          // Instant scroll to bottom on initial load (not smooth)
-          requestAnimationFrame(() => {
-            const el = scrollRef.current;
-            if (el) {
-              el.scrollTop = el.scrollHeight;
-              initialLoadDoneRef.current = true;
-            }
-          });
+    // Don't flash the previous conversation's messages while the new
+    // conversation's first snapshot is in flight. Keep queued/failed temps
+    // from other conversations in the store so they reappear when reopened
+    // (the render layer filters by the active conversation).
+    useChatStore.setState((state) => ({
+      messages: state.messages.filter(
+        (m) => m.conversationId === convId || m.status === 'queued' || m.status === 'failed'
+      ),
+    }));
+    // Per-conversation reset (owned by this effect — never written elsewhere).
+    initialLoadDoneRef.current = false;
+    msgErrorShownRef.current = false;
+
+    const unsub = subscribeMessages(convId, (fsMsgs, hasMore) => {
+      if (cancelled) return;
+      const remote = fsMsgs.map((m) => fsMessageToMessage(m, convId));
+      useChatStore.setState((state) => {
+        // Upsert snapshot messages into the loaded set (preserves older pages
+        // loaded via pagination) and drop optimistic temps that were persisted.
+        const persistedTempIds = new Set(fsMsgs.map((m) => m.tempId).filter(Boolean) as string[]);
+        const byId = new Map<string, Message>();
+        for (const m of state.messages) {
+          // Keep the active conversation's messages plus unsynced temps
+          // (queued/failed) from other conversations so they survive
+          // conversation switches and reappear when reopened.
+          if (m.conversationId === convId || m.status === 'queued' || m.status === 'failed') {
+            byId.set(m.id, m);
+          }
         }
-      } catch (err: any) { if (!cancelled) toast.error(err.message); }
-    })();
-    return () => { cancelled = true; };
-  }, [activeConversationId, token]);
+        for (const m of remote) byId.set(m.id, m);
+        for (const id of [...byId.keys()]) {
+          const m = byId.get(id)!;
+          if (m.id.startsWith('temp-') && persistedTempIds.has(m.id)) byId.delete(id);
+        }
+        const merged = [...byId.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+        return { messages: merged };
+      });
+      // hasMore stays monotonic: the snapshot reports whether the window is
+      // full, but once we've reached the very start of the conversation we
+      // never re-enable load-more (avoids re-fetch loops at the top).
+      setHasMoreMessages(hasMore && !reachedStartRef.current);
+      // Instant scroll to bottom only on the initial load, not every snapshot.
+      if (!initialLoadDoneRef.current) {
+        requestAnimationFrame(() => {
+          const el = scrollRef.current;
+          if (el) {
+            el.scrollTop = el.scrollHeight;
+            initialLoadDoneRef.current = true;
+          }
+        });
+      }
+    }, (err) => {
+      if (cancelled) return;
+      console.error('[chat] message subscription error', err);
+      if (!msgErrorShownRef.current) {
+        msgErrorShownRef.current = true;
+        toast.error('Chat unavailable — check connection and Firestore setup');
+      }
+    });
+
+    return () => { cancelled = true; unsub(); };
+  }, [activeConversationId, token, user?.id, setHasMoreMessages]);
+
+  // Mark the conversation as read when a new message from the other user
+  // arrives while it's open (avoids a write on every snapshot).
+  useEffect(() => {
+    if (!activeConversationId || !user?.id || token?.startsWith('demo-')) return;
+    const last = messages[messages.length - 1];
+    if (!last || last.senderId === user.id) return;
+    markConversationRead(activeConversationId, user.id).catch(() => {});
+  }, [activeConversationId, user?.id, token, messages]);
+
+  /**
+   * Phase 3: RTDB typing subscription — replaces the socket 'user:typing'
+   * listener (previously wired in conversation-list). Subscribes per active
+   * conversation and mirrors entries into the chat store.
+   */
+  useEffect(() => {
+    if (!activeConversationId || !user?.id || token?.startsWith('demo-')) return;
+    const convId = activeConversationId;
+    const unsub = subscribeTyping(convId, (typing) => {
+      for (const [uid, data] of Object.entries(typing)) {
+        setTyping(uid, convId, Boolean(data?.isTyping), data?.user ?? null);
+      }
+    });
+    return () => {
+      unsub();
+      clearTypingForConversation(convId);
+    };
+  }, [activeConversationId, user?.id, token, setTyping]);
 
   // Clean up typing timeout on unmount
   useEffect(() => {
@@ -499,13 +533,17 @@ export function ConversationView() {
   }, [messages, isTyping, wasAtBottom]);
 
   const sendMessage = useCallback(() => {
-    if (!input.trim() || !activeConversationId) return;
+    if (!input.trim() || !activeConversationId || !user) return;
     const content = input.trim();
     const replyId = replyTo?.id || null;
+    const recipientId = useChatStore
+      .getState()
+      .conversations.find((c) => c.id === activeConversationId)
+      ?.participants?.find((p) => p !== user.id);
 
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const now = new Date().toISOString();
-    const isOnline = isSocketConnected();
+    const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
     const status: Message['status'] = isOnline ? 'sending' : 'queued';
 
     const optimisticMsg: Message = {
@@ -530,16 +568,25 @@ export function ConversationView() {
     setShowEmoji(false);
     if (inputRef.current) inputRef.current.style.height = 'auto';
 
+    // Phase 3: stop typing via RTDB (was socket 'typing:stop')
+    if (user?.id && !token?.startsWith('demo-')) setTypingState(activeConversationId, user.id, false).catch(() => {});
+    if (typingTimeout.current) clearTimeout(typingTimeout.current);
+
     if (isOnline) {
-      const socket = getSocket();
-      socket.emit('typing:stop', { conversationId: activeConversationId });
-      if (typingTimeout.current) clearTimeout(typingTimeout.current);
-      socket.emit('message:send', {
+      // Phase 2: write directly to Firestore — the snapshot replaces the
+      // optimistic temp message (matched by tempId).
+      firestoreSendMessage({
         conversationId: activeConversationId,
+        sender: user,
+        recipientId,
         content,
         type: 'text',
         replyToId: replyId,
-      });
+        replyTo: replyTo ?? null,
+        tempId,
+      })
+        .then(() => updateMessage(tempId, { status: 'sent' }))
+        .catch(() => setMessageStatus(tempId, 'failed'));
     } else {
       // Offline: persist to IndexedDB for later sync
       const queued: QueuedMessage = {
@@ -548,7 +595,7 @@ export function ConversationView() {
         content,
         type: 'text',
         replyToId: replyId,
-        senderId: user?.id || '',
+        senderId: user.id,
         sender: optimisticMsg.sender,
         replyTo: optimisticMsg.replyTo,
         createdAt: now,
@@ -556,7 +603,7 @@ export function ConversationView() {
       };
       saveQueuedMessage(queued).catch(() => {});
     }
-  }, [input, activeConversationId, replyTo, user, addMessage]);
+  }, [input, activeConversationId, replyTo, user, addMessage, updateMessage, setMessageStatus]);
 
   // --- Image selection handler ---
   const handleImageSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -594,12 +641,16 @@ export function ConversationView() {
 
   // --- Send image message with upload ---
   const sendImageMessage = useCallback(() => {
-    if (!pendingImage || !activeConversationId || !token || isUploading) return;
+    if (!pendingImage || !activeConversationId || !token || !user || isUploading) return;
     setIsUploading(true);
     setUploadProgress(0);
 
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const caption = input.trim();
+    const recipientId = useChatStore
+      .getState()
+      .conversations.find((c) => c.id === activeConversationId)
+      ?.participants?.find((p) => p !== user.id);
     const tempAttachment: MediaAttachment = {
       id: `temp-att-${Date.now()}`,
       type: 'image',
@@ -657,28 +708,31 @@ export function ConversationView() {
         try {
           const res = JSON.parse(xhr.responseText);
           if (res.success && res.data?.id) {
-            // Send message via socket with attachment
-            const socket = getSocket();
-            socket.emit('message:send', {
+            const realAttachment: MediaAttachment = {
+              id: res.data.id,
+              type: 'image',
+              url: res.data.url || pendingImage.dataUrl,
+              name: pendingImage.name,
+              size: pendingImage.size,
+              mimeType: pendingImage.mimeType,
+              width: pendingImage.width,
+              height: pendingImage.height,
+            };
+            // Update optimistic message with the real attachment
+            updateMessage(tempId, { attachments: [realAttachment] });
+            // Phase 2: send via Firestore with the uploaded attachment
+            firestoreSendMessage({
               conversationId: activeConversationId,
+              sender: user,
+              recipientId,
               content: caption,
               type: 'image',
               replyToId: optimisticMsg.replyToId,
-              attachmentId: res.data.id,
-            });
-            // Update optimistic message with real attachment
-            updateMessage(tempId, {
-              attachments: [{
-                id: res.data.id,
-                type: 'image',
-                url: pendingImage.dataUrl,
-                name: pendingImage.name,
-                size: pendingImage.size,
-                mimeType: pendingImage.mimeType,
-                width: pendingImage.width,
-                height: pendingImage.height,
-              }],
-            });
+              attachments: [realAttachment],
+              tempId,
+            })
+              .then(() => updateMessage(tempId, { status: 'sent' }))
+              .catch(() => setMessageStatus(tempId, 'failed'));
           } else {
             setMessageStatus(tempId, 'failed');
             toast.error(res.error || 'Upload failed');
@@ -714,17 +768,25 @@ export function ConversationView() {
   }, [pendingImage, sendImageMessage, sendMessage]);
 
   const retryMessage = useCallback((msg: Message) => {
-    if (!activeConversationId || msg.status !== 'failed') return;
-    const socket = getSocket();
+    if (!activeConversationId || msg.status !== 'failed' || !user) return;
+    const recipientId = useChatStore
+      .getState()
+      .conversations.find((c) => c.id === activeConversationId)
+      ?.participants?.find((p) => p !== user.id);
     // Update locally to 'sending'
     updateMessage(msg.id, { status: 'sending' });
-    socket.emit('message:send', {
+    firestoreSendMessage({
       conversationId: activeConversationId,
+      sender: user,
+      recipientId,
       content: msg.content,
-      type: 'text',
+      type: msg.type,
       replyToId: msg.replyToId,
-    });
-  }, [activeConversationId, updateMessage]);
+      tempId: msg.id.startsWith('temp-') ? msg.id : undefined,
+    })
+      .then(() => updateMessage(msg.id, { status: 'sent' }))
+      .catch(() => updateMessage(msg.id, { status: 'failed' }));
+  }, [activeConversationId, user, updateMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -737,12 +799,12 @@ export function ConversationView() {
     setInput(e.target.value);
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
-    if (activeConversationId) {
-      const socket = getSocket();
-      socket.emit('typing:start', { conversationId: activeConversationId });
+    if (activeConversationId && user?.id && !token?.startsWith('demo-')) {
+      // Phase 3: typing indicator via RTDB (was socket 'typing:start'/'typing:stop')
+      setTypingState(activeConversationId, user.id, true, user).catch(() => {});
       if (typingTimeout.current) clearTimeout(typingTimeout.current);
       typingTimeout.current = setTimeout(() => {
-        socket.emit('typing:stop', { conversationId: activeConversationId });
+        setTypingState(activeConversationId, user.id, false).catch(() => {});
       }, 2000);
     }
   };
@@ -758,10 +820,8 @@ export function ConversationView() {
   const saveEdit = async () => {
     if (!editingId || !editText.trim() || !activeConversationId) return;
     try {
-      const updated = await api<Message>('/conversations/' + activeConversationId + '/messages', {
-        token, method: 'PUT', body: { messageId: editingId, content: editText.trim() },
-      });
-      updateMessage(editingId, updated);
+      await firestoreEditMessage(activeConversationId, editingId, editText.trim());
+      updateMessage(editingId, { content: editText.trim(), edited: true });
       setEditingId(null);
       setEditText('');
     } catch (err: any) { toast.error(err.message); }
@@ -769,9 +829,10 @@ export function ConversationView() {
 
   const deleteMessage = async (msgId: string) => {
     if (token?.startsWith('demo-')) { toast.info('Demo mode'); return; }
+    if (!activeConversationId) return;
     try {
-      await api('/messages/' + msgId, { token, method: 'DELETE' });
-      updateMessage(msgId, { content: 'This message was deleted', deleted: true } as Partial<Message>);
+      await firestoreDeleteMessage(activeConversationId, msgId);
+      updateMessage(msgId, { content: 'This message was deleted', deleted: true, status: 'deleted' } as Partial<Message>);
     } catch (err: any) { toast.error(err.message); }
   };
 
@@ -782,11 +843,11 @@ export function ConversationView() {
     );
   };
 
-  const blockUser = async () => {
-    if (!otherUser) return;
+  const handleBlockUser = async () => {
+    if (!otherUser || !user) return;
     if (token?.startsWith('demo-')) { toast.info('Demo mode'); return; }
     try {
-      await api('/blocks/block', { token, body: { userId: otherUser.id } });
+      await blockUser(user.id, { id: otherUser.id, displayName: otherUser.displayName, username: otherUser.username, avatar: otherUser.avatar });
       toast.success(`${otherUser.displayName} has been blocked`);
       setActiveConversationId(null);
     } catch (err: any) { toast.error(err.message); }
@@ -800,26 +861,55 @@ export function ConversationView() {
   };
 
   const sendForward = useCallback(() => {
-    if (!forwardMsg?.content || !activeConversationId) return;
-    const socket = getSocket();
-    socket.emit('message:send', {
+    if (!forwardMsg?.content || !activeConversationId || !user) return;
+    const recipientId = useChatStore
+      .getState()
+      .conversations.find((c) => c.id === activeConversationId)
+      ?.participants?.find((p) => p !== user.id);
+    firestoreSendMessage({
       conversationId: activeConversationId,
+      sender: user,
+      recipientId,
       content: forwardMsg.content,
       type: 'text',
       replyToId: null,
-    });
+    }).catch(() => {});
     setForwardMsg(null);
-  }, [forwardMsg, activeConversationId]);
+  }, [forwardMsg, activeConversationId, user]);
 
   const handleReact = useCallback((messageId: string, emoji: string) => {
-    const socket = getSocket();
-    socket.emit('reaction:add', { messageId, emoji });
+    if (!activeConversationId || !user) return;
+    // Optimistic local toggle — the Firestore snapshot reconciles the source of truth.
+    const msg = useChatStore.getState().messages.find((m) => m.id === messageId);
+    if (msg?.senderId === user.id) return; // legacy: no self-reactions
+    const existing = msg?.reactions?.find((r) => r.userId === user.id && r.emoji === emoji);
+    if (existing) {
+      removeReaction(messageId, user.id, emoji);
+    } else {
+      // Remove any other reaction by this user first (legacy single-reaction behavior)
+      for (const r of msg?.reactions?.filter((r) => r.userId === user.id) ?? []) {
+        removeReaction(messageId, user.id, r.emoji);
+      }
+      addReaction(messageId, {
+        id: `${messageId}-${emoji}-${user.id}`,
+        messageId,
+        userId: user.id,
+        emoji,
+        createdAt: new Date().toISOString(),
+        user: { id: user.id, displayName: user.displayName, avatar: user.avatar },
+      });
+    }
+    toggleReaction(activeConversationId, messageId, emoji, user).catch(() => {});
     setQuickReactMsgId(null);
-  }, []);
+  }, [activeConversationId, user, addReaction, removeReaction]);
 
   const filteredMessages = searchMsg
-    ? messages.filter((m) => m.content.toLowerCase().includes(searchMsg.toLowerCase()))
-    : messages;
+    ? messages.filter(
+        (m) =>
+          m.conversationId === activeConversationId &&
+          m.content.toLowerCase().includes(searchMsg.toLowerCase())
+      )
+    : messages.filter((m) => m.conversationId === activeConversationId);
 
   if (!activeConversationId || !otherUser) {
     return (
@@ -895,7 +985,7 @@ export function ConversationView() {
               <Search className="mr-2 h-3.5 w-3.5" /> Search Messages
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => { blockUser(); setQuickReactMsgId(null); }} className="text-xs cursor-pointer text-destructive focus:text-destructive">
+            <DropdownMenuItem onClick={() => { handleBlockUser(); setQuickReactMsgId(null); }} className="text-xs cursor-pointer text-destructive focus:text-destructive">
               <UserX className="mr-2 h-3.5 w-3.5" /> Block User
             </DropdownMenuItem>
           </DropdownMenuContent>
@@ -929,7 +1019,7 @@ export function ConversationView() {
           )}
 
           {/* Start of chat indicator */}
-          {!hasMoreMessages && messages.length > 0 && (
+          {!hasMoreMessages && filteredMessages.length > 0 && (
             <div className="mb-4 flex items-center justify-center">
               <span className="rounded-full bg-surface-2 px-3 py-1 text-[10px] text-muted-foreground/60">
                 Start of conversation
@@ -942,8 +1032,10 @@ export function ConversationView() {
             const prevMsg = i > 0 ? filteredMessages[i - 1] : null;
             const showAvatar = !isMine && (i === 0 || prevMsg?.senderId !== msg.senderId);
             const isLast = i === filteredMessages.length - 1 || filteredMessages[i + 1]?.senderId !== msg.senderId;
-            const isFailed = msg.status === 'failed';
-            const isSending = msg.status === 'sending';
+            // Derive display status — read receipts live on the conversation doc (Phase 2)
+            const displayStatus = deriveMessageStatus(msg, activeConv, user?.id || '');
+            const isFailed = displayStatus === 'failed';
+            const isSending = displayStatus === 'sending';
             const repliedMsg = msg.replyTo;
             const showQuickReact = quickReactMsgId === msg.id;
 
@@ -1121,7 +1213,7 @@ export function ConversationView() {
                       <span className="text-[10px] text-muted-foreground/50">
                         {format(new Date(msg.createdAt), 'h:mm a')}
                       </span>
-                      {isMine && <MessageStatus status={msg.status} />}
+                      {isMine && <MessageStatus status={displayStatus} />}
                     </div>
                   )}
                 </div>
@@ -1170,7 +1262,7 @@ export function ConversationView() {
 
         {/* Scroll to bottom button */}
         <AnimatePresence>
-          {!wasAtBottom && messages.length > 0 && (
+          {!wasAtBottom && filteredMessages.length > 0 && (
             <motion.button
               initial={{ opacity: 0, scale: 0.8 }}
               animate={{ opacity: 1, scale: 1 }}

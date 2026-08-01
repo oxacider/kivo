@@ -1,0 +1,157 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ------------------------------------------------------------------
+    // users/{firebaseUid} → { kivoId }  (uid → KIVO user id mapping)
+    // Written by the register route / ensureUserMapping (client).
+    // ------------------------------------------------------------------
+    match /users/{firebaseUid} {
+      allow read: if request.auth != null && request.auth.uid == firebaseUid;
+      allow write: if request.auth != null && request.auth.uid == firebaseUid;
+    }
+
+    // ------------------------------------------------------------------
+    // friendships/{fsId}  (fsId = fs_{id1}_{id2}, sorted KIVO pair)
+    //   1:1 friendship requests. Only participants can read; only the
+    //   requester can create; updates limited to status transitions by a
+    //   participant (accept/decline); participants are immutable.
+    // ------------------------------------------------------------------
+    match /friendships/{fsId} {
+      function myKivoId() {
+        return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.kivoId;
+      }
+      function isParticipant() {
+        return request.auth != null && myKivoId() in resource.data.participants;
+      }
+      function validPair() {
+        return request.auth != null &&
+          request.resource.data.participants.size() == 2 &&
+          request.resource.data.participants.distinct().size() == 2 &&
+          request.resource.data.participants.hasAll([
+            request.resource.data.requesterId,
+            request.resource.data.receiverId,
+          ]);
+      }
+
+      allow read: if isParticipant();
+
+      // Only the requester may create a pending request.
+      allow create: if request.auth != null &&
+        request.resource.data.requesterId == myKivoId() &&
+        request.resource.data.receiverId != myKivoId() &&
+        request.resource.data.status == 'pending' &&
+        validPair();
+
+      // Only the receiver may transition a pending request (accept/decline);
+      // the pair and requester/receiver are immutable.
+      allow update: if isParticipant() &&
+        request.resource.data.participants == resource.data.participants &&
+        request.resource.data.requesterId == resource.data.requesterId &&
+        request.resource.data.receiverId == resource.data.receiverId &&
+        resource.data.status == 'pending' &&
+        resource.data.receiverId == myKivoId() &&
+        request.resource.data.status in ['accepted', 'declined'];
+
+      // Cancelling / removing a friendship deletes the doc. Deleting a
+      // non-existent doc is a no-op (resource == null) — required so a batch
+      // that deletes a friendship which is already gone doesn't fail.
+      allow delete: if request.auth != null &&
+        (resource == null || myKivoId() in resource.data.participants);
+    }
+
+    // ------------------------------------------------------------------
+    // blocks/{blkId}  (blkId = blk_{blockerId}_{blockedId})
+    //   Only the blocker can create/unblock; both sides may read (so the
+    //   blocked user can see 'blocked_by' status).
+    // ------------------------------------------------------------------
+    match /blocks/{blkId} {
+      function myKivoId() {
+        return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.kivoId;
+      }
+      function isInvolved() {
+        return request.auth != null &&
+          (resource.data.blockerId == myKivoId() || resource.data.blockedId == myKivoId());
+      }
+
+      allow read: if isInvolved();
+      allow create: if request.auth != null &&
+        request.resource.data.blockerId == myKivoId() &&
+        request.resource.data.blockedId != myKivoId() &&
+        request.resource.data.participants.size() == 2 &&
+        request.resource.data.participants.distinct().size() == 2 &&
+        request.resource.data.participants.hasAll([
+          request.resource.data.blockerId,
+          request.resource.data.blockedId,
+        ]);
+      allow update: if false;
+      // Unblock. resource == null covers deleting a block doc that is already
+      // gone (no-op) so the client can't be blocked from cleanup.
+      allow delete: if request.auth != null &&
+        (resource == null || resource.data.blockerId == myKivoId());
+    }
+
+    // ------------------------------------------------------------------
+    // conversations/{convId}
+    //   1:1 chats. participants = [kivoId1, kivoId2].
+    // Only participants can read/update their conversations. Since Phase 4
+    // friendships live in Firestore, the client may create a conversation
+    // directly — but only when an ACCEPTED friendship exists for the exact
+    // participant pair (prevents unsolicited conversation creation).
+    // ------------------------------------------------------------------
+    match /conversations/{convId} {
+      function myKivoId() {
+        return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.kivoId;
+      }
+      function isParticipant() {
+        return request.auth != null &&
+          myKivoId() in resource.data.participants;
+      }
+      function hasAcceptedFriendship() {
+        return request.auth != null &&
+          request.resource.data.participants.size() == 2 &&
+          request.resource.data.participants.distinct().size() == 2 &&
+          myKivoId() in request.resource.data.participants &&
+          exists(/databases/$(database)/documents/friendships/fs_$(request.resource.data.participants[0])_$(request.resource.data.participants[1])) &&
+          get(/databases/$(database)/documents/friendships/fs_$(request.resource.data.participants[0])_$(request.resource.data.participants[1])).data.status == 'accepted';
+      }
+
+      allow read: if isParticipant();
+      // Admin SDK (legacy API routes) may create; the client may only create
+      // a conversation for an accepted friendship pair, with no preview data.
+      allow create: if hasAcceptedFriendship() &&
+        request.resource.data.lastMessage == null;
+      // Participants may update preview/unread/read-receipt fields, but the
+      // participant list is immutable — prevents privilege escalation.
+      allow update: if isParticipant() &&
+        request.resource.data.participants == resource.data.participants;
+      allow delete: if false;
+
+      // ----------------------------------------------------------------
+      // conversations/{convId}/messages/{msgId}
+      // Only participants can read; only the sender can create messages;
+      // participants may update reactions/status; only sender can edit
+      // content or delete.
+      // ----------------------------------------------------------------
+      match /messages/{msgId} {
+        function msgParticipant() {
+          return request.auth != null &&
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.kivoId in
+            get(/databases/$(database)/documents/conversations/$(convId)).data.participants;
+        }
+        function isSender() {
+          return request.auth != null &&
+            request.resource.data.senderId ==
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.kivoId;
+        }
+        allow read: if msgParticipant();
+        allow create: if msgParticipant() && isSender();
+        allow update: if msgParticipant() && (
+          isSender() ||
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
+        );
+        allow delete: if false;
+      }
+    }
+  }
+}

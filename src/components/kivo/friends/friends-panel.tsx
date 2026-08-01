@@ -5,13 +5,24 @@ import { useAuthStore } from '@/stores/auth-store';
 import { useFriendsStore } from '@/stores/friends-store';
 import { useChatStore } from '@/stores/chat-store';
 import { api } from '@/lib/api';
+import { getOrCreateConversation } from '@/lib/chat-service';
+import {
+  sendFriendRequest,
+  acceptFriendRequest,
+  declineFriendRequest,
+  cancelFriendRequest,
+  removeFriend as removeFriendService,
+  blockUser,
+  unblockUser,
+  friendshipPairKey,
+} from '@/lib/friends-service';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Search, UserPlus, Check, X, UserMinus, ArrowLeft, UserX } from 'lucide-react';
 import { toast } from 'sonner';
-import type { User, Friendship } from '@/types';
+import type { User } from '@/types';
 
 function getInitials(name: string) {
   return name.slice(0, 2).toUpperCase();
@@ -22,12 +33,11 @@ interface Props {
 }
 
 export function FriendsPanel({ onClose }: Props) {
-  const { token } = useAuthStore();
-  const { friends, pendingRequests, sentRequests, searchResults, isSearching, setFriends, setPendingRequests, setSentRequests, addFriend, removeFriend, addSentRequest, removeSentRequest, setSearchResults, setIsSearching } = useFriendsStore();
+  const { user, token } = useAuthStore();
+  const { friends, pendingRequests, sentRequests, searchResults, isSearching, blockedUsers, setPendingRequests, addFriend, removeFriend, addSentRequest, removeSentRequest, setSearchResults, setIsSearching, removeBlockedUser } = useFriendsStore();
   const { addConversation, setActiveConversationId } = useChatStore();
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState<'friends' | 'requests' | 'sent' | 'add' | 'blocked'>('friends');
-  const [blockedUsers, setBlockedUsers] = useState<User[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const searchUsers = async (q: string) => {
@@ -46,18 +56,29 @@ export function FriendsPanel({ onClose }: Props) {
     return () => clearTimeout(debounceRef.current);
   }, [search]);
 
-  const sendRequest = async (receiverId: string) => {
+  const sendRequest = async (receiver: User) => {
+    if (!user) return;
     try {
-      const results = await api<Friendship>('/friends/request', { token, body: { receiverId } });
-      addSentRequest(results);
-      setSearchResults(searchResults.filter((u: User) => u.id !== receiverId));
+      await sendFriendRequest(user, receiver);
+      addSentRequest({
+        id: friendshipPairKey(user.id, receiver.id),
+        senderId: user.id,
+        receiverId: receiver.id,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        sender: user,
+        receiver,
+      });
+      setSearchResults(searchResults.filter((u: User) => u.id !== receiver.id));
       toast.success('Friend request sent');
     } catch (err: any) { toast.error(err.message); }
   };
 
   const acceptRequest = async (id: string) => {
+    if (!user) return;
     try {
-      await api('/friends/accept', { token, body: { requestId: id } });
+      await acceptFriendRequest(id, user.id);
       const req = pendingRequests.find((r) => r.id === id);
       if (req) addFriend(req.sender as unknown as User);
       setPendingRequests(pendingRequests.filter((r) => r.id !== id));
@@ -66,77 +87,67 @@ export function FriendsPanel({ onClose }: Props) {
   };
 
   const declineRequest = async (id: string) => {
+    if (!user) return;
     try {
-      await api('/friends/decline', { token, body: { requestId: id } });
+      await declineFriendRequest(id, user.id);
       setPendingRequests(pendingRequests.filter((r) => r.id !== id));
     } catch (err: any) { toast.error(err.message); }
   };
 
   const removeFriendAction = async (userId: string) => {
+    if (!user) return;
     try {
-      await api('/friends/remove', { token, body: { userId } });
+      await removeFriendService(user.id, userId);
       removeFriend(userId);
       toast.success('Friend removed');
     } catch (err: any) { toast.error(err.message); }
   };
 
-  const blockUserAction = async (userId: string, name: string) => {
+  const blockUserAction = async (target: User) => {
+    if (!user) return;
     try {
-      await api('/blocks/block', { token, body: { userId } });
-      removeFriend(userId);
-      toast.success(`${name} has been blocked`);
+      await blockUser(user.id, { id: target.id, displayName: target.displayName, username: target.username, avatar: target.avatar });
+      removeFriend(target.id);
+      toast.success(`${target.displayName || target.username} has been blocked`);
     } catch (err: any) { toast.error(err.message); }
   };
 
   const startChat = async (userId: string) => {
+    if (!user) return;
     try {
-      const conv = await api<any>('/conversations', { token, body: { userId } });
-      addConversation(conv);
-      setActiveConversationId(conv.id);
+      const convId = await getOrCreateConversation(user.id, userId);
+      const friend = friends.find((f) => f.id === userId);
+      if (friend) {
+        addConversation({
+          id: convId,
+          user1Id: user.id,
+          user2Id: userId,
+          participants: [user.id, userId],
+          otherUser: friend,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      setActiveConversationId(convId);
       onClose();
     } catch (err: any) { toast.error(err.message); }
   };
 
-  // Load friends data on mount
-  useEffect(() => {
-    if (!token) return;
-    (async () => {
-      try {
-        const [friendsList, requestsList, sentList]: any[] = await Promise.all([
-          api('/friends/list', { token }),
-          api('/friends/requests', { token }),
-          api('/friends/sent', { token }),
-        ]);
-        setFriends(friendsList);
-        setPendingRequests(requestsList);
-        setSentRequests(sentList);
-      } catch { /* ignore */ }
-    })();
-  }, [token, setFriends, setPendingRequests, setSentRequests]);
-
+  // Friends data now streams from the Firestore useFriends() hook (Phase 4).
   const cancelRequest = async (id: string) => {
+    if (!user) return;
     try {
-      await api('/friends/cancel', { token, body: { requestId: id } });
+      await cancelFriendRequest(id, user.id);
       removeSentRequest(id);
       toast.success('Request cancelled');
     } catch (err: any) { toast.error(err.message); }
   };
 
-  useEffect(() => {
-    if (tab === 'blocked') {
-      (async () => {
-        try {
-          const list = await api<User[]>('/blocks/list', { token });
-          setBlockedUsers(list);
-        } catch { /* ignore */ }
-      })();
-    }
-  }, [tab, token]);
-
-  const unblockUser = async (userId: string) => {
+  const unblockUserAction = async (userId: string) => {
+    if (!user) return;
     try {
-      await api('/blocks/unblock', { token, body: { userId } });
-      setBlockedUsers((prev) => prev.filter((u) => u.id !== userId));
+      await unblockUser(user.id, userId);
+      removeBlockedUser(userId);
       toast.success('User unblocked');
     } catch (err: any) { toast.error(err.message); }
   };
@@ -203,7 +214,7 @@ export function FriendsPanel({ onClose }: Props) {
                 <button onClick={() => removeFriendAction(f.id)} className="text-muted-foreground hover:text-destructive transition-colors p-1">
                   <UserMinus className="h-3.5 w-3.5" />
                 </button>
-                <button onClick={() => blockUserAction(f.id, f.displayName || f.username)} className="text-muted-foreground hover:text-destructive transition-colors p-1">
+                <button onClick={() => blockUserAction(f)} className="text-muted-foreground hover:text-destructive transition-colors p-1">
                   <UserX className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -263,7 +274,7 @@ export function FriendsPanel({ onClose }: Props) {
                   <span className="text-[10px] text-muted-foreground px-2 py-0.5 bg-surface-2 rounded-md">Pending</span>
                 ) : (
                   <button
-                    onClick={() => sendRequest(u.id)}
+                    onClick={() => sendRequest(u)}
                     className="flex items-center gap-1 text-[10px] font-medium text-primary hover:bg-primary/10 px-2 py-1 rounded-lg transition-colors"
                   >
                     <UserPlus className="h-3 w-3" /> Add
@@ -318,7 +329,7 @@ export function FriendsPanel({ onClose }: Props) {
                   <p className="text-[10px] text-muted-foreground">@{u.username}</p>
                 </div>
                 <button
-                  onClick={() => unblockUser(u.id)}
+                  onClick={() => unblockUserAction(u.id)}
                   className="text-[10px] font-medium text-primary hover:bg-primary/10 px-2 py-1 rounded-lg transition-colors"
                 >
                   Unblock
