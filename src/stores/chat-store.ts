@@ -4,6 +4,7 @@ import { saveQueuedMessage, getAllQueuedMessages, removeQueuedMessage } from '@/
 import { sendMessage as firestoreSendMessage } from '@/lib/chat-service';
 import { useAuthStore } from '@/stores/auth-store';
 import { schedulePushHistory } from '@/lib/navigation';
+import type { PresenceConnectionStatus } from '@/lib/presence';
 
 export interface TypingUserData extends TypingUser {
   user?: { id: string; displayName: string; avatar: string } | null;
@@ -24,11 +25,11 @@ interface ChatState {
   networkStatus: NetworkStatus;
   isSyncing: boolean;
   /** Phase 3: live RTDB presence map keyed by kivoId. */
-  presenceMap: Record<string, { online: boolean; lastSeen: string }>;
+  presenceMap: Record<string, { online: boolean; lastSeen: string; connectionStatus?: PresenceConnectionStatus }>;
   setConversations: (conversations: Conversation[]) => void;
   addConversation: (conversation: Conversation) => void;
   updateConversation: (id: string, data: Partial<Conversation>) => void;
-  setPresence: (userId: string, online: boolean, lastSeen: string) => void;
+  setPresence: (userId: string, online: boolean, lastSeen: string, connectionStatus?: PresenceConnectionStatus) => void;
   setActiveConversationId: (id: string | null) => void;
   setMessages: (messages: Message[]) => void;
   prependMessages: (messages: Message[]) => void;
@@ -65,7 +66,7 @@ const initialState = {
   searchQuery: '',
   networkStatus: 'online' as NetworkStatus,
   isSyncing: false,
-  presenceMap: {} as Record<string, { online: boolean; lastSeen: string }>,
+  presenceMap: {} as Record<string, { online: boolean; lastSeen: string; connectionStatus?: PresenceConnectionStatus }>,
 };
 
 function isOnline(): boolean {
@@ -177,9 +178,9 @@ export const useChatStore = create<ChatState>()((set, get) => ({
       ),
     })),
   setNetworkStatus: (networkStatus) => set({ networkStatus }),
-  setPresence: (userId, online, lastSeen) =>
+  setPresence: (userId, online, lastSeen, connectionStatus) =>
     set((state) => ({
-      presenceMap: { ...state.presenceMap, [userId]: { online, lastSeen } },
+      presenceMap: { ...state.presenceMap, [userId]: { online, lastSeen, connectionStatus } },
       // Mirror onto conversation otherUser so headers/list stay live too.
       conversations: state.conversations.map((c) =>
         c.otherUser?.id === userId

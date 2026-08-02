@@ -146,9 +146,21 @@ service cloud.firestore {
         }
         allow read: if msgParticipant();
         allow create: if msgParticipant() && isSender();
+        // Senders may edit their own message; participants may update reactions
+        // and the KIVO status receipt fields (status/deliveredAt/seenAt) but
+        // only forward: sent → delivered → seen (never backwards).
         allow update: if msgParticipant() && (
           isSender() ||
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
+          (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'reactions', 'status', 'deliveredAt', 'seenAt'
+            ]) &&
+            (
+              request.resource.data.status == resource.data.status ||
+              (resource.data.status == 'sent' && request.resource.data.status == 'delivered') ||
+              (resource.data.status in ['sent', 'delivered'] && request.resource.data.status == 'seen')
+            )
+          )
         );
         allow delete: if false;
       }

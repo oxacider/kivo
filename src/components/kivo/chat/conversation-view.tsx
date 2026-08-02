@@ -11,7 +11,7 @@ import {
   Send, Smile, MoreHorizontal, ArrowLeft, Check, CheckCheck,
   Edit3, Trash2, X, CornerDownRight, UserX, Forward, Search,
   Copy, RotateCcw, ImageIcon, Paperclip, Mic, Clock,
-  AlertCircle, Sparkles, Loader2, Upload, WifiOff, ArrowDown
+  AlertCircle, Sparkles, Loader2, Upload, WifiOff, ArrowDown, Info
 } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
@@ -30,7 +30,11 @@ import {
   loadOlderMessages,
   deriveMessageStatus,
   markConversationRead,
+  markMessagesDelivered,
+  markMessagesSeen,
 } from '@/lib/chat-service';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useHaptics } from '@/hooks/use-haptics';
 import type { Message, Reaction, PendingImage, MediaAttachment, QueuedMessage } from '@/types';
 
 function getInitials(name: string) { return name.slice(0, 2).toUpperCase(); }
@@ -91,7 +95,8 @@ function formatLastSeen(dateStr: string): string {
   }
 }
 
-// --- Message Status Icon ---
+// --- KIVO Message Status Icon ---
+// ◷ Sending · ✓ Sent · ✓✓ Connected (gray) · ✓✓ Seen (blue)
 function MessageStatus({ status, className = '' }: { status: Message['status']; className?: string }) {
   if (status === 'failed') {
     return <AlertCircle className={`h-3.5 w-3.5 text-destructive ${className}`} />;
@@ -100,20 +105,53 @@ function MessageStatus({ status, className = '' }: { status: Message['status']; 
     return <Clock className={`h-3.5 w-3.5 text-amber-500 ${className}`} />;
   }
   if (status === 'sending') {
-    return <div className={`flex items-center gap-0.5 ${className}`}>
-      {[0, 1, 2].map(i => (
-        <span key={i} className="h-1 w-1 rounded-full bg-current opacity-40"
-          style={{ animation: 'kivo-status-pulse 1s ease-in-out infinite', animationDelay: `${i * 0.2}s` }} />
-      ))}
-    </div>;
+    return <span className={`inline-flex items-center text-[13px] leading-none animate-kivo-sending-spin ${className}`}>◷</span>;
   }
-  if (status === 'read') {
-    return <CheckCheck className={`h-3.5 w-3.5 text-primary ${className}`} />;
+  if (status === 'seen') {
+    return <CheckCheck className={`h-3.5 w-3.5 text-seen ${className}`} />;
   }
   if (status === 'delivered') {
-    return <CheckCheck className={`h-3.5 w-3.5 text-muted-foreground/50 ${className}`} />;
+    return <CheckCheck className={`h-3.5 w-3.5 text-muted-foreground/60 ${className}`} />;
   }
   return <Check className={`h-3 w-3 text-muted-foreground/40 ${className}`} />;
+}
+
+// --- KIVO Message Info Panel (long-press) ---
+function MessageInfoDialog({ msg, onClose }: { msg: Message | null; onClose: () => void }) {
+  const fmt = (t?: string | null) => (t ? format(new Date(t), 'h:mm a') : null);
+  const rows: { label: string; status: Message['status']; time: string | null }[] = [
+    { label: 'Sent', status: 'sent', time: fmt(msg?.sentAt ?? msg?.createdAt) },
+    { label: 'Connected', status: 'delivered', time: fmt(msg?.deliveredAt) },
+    { label: 'Seen', status: 'seen', time: fmt(msg?.seenAt) },
+  ];
+  return (
+    <Dialog open={!!msg} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-xs" showCloseButton>
+        <DialogHeader>
+          <DialogTitle className="text-base">Message Info</DialogTitle>
+          <DialogDescription className="sr-only">Delivery details for this message</DialogDescription>
+        </DialogHeader>
+        {msg && (
+          <div className="flex flex-col gap-2 pt-1">
+            {rows.map((r) => (
+              <div
+                key={r.label}
+                className="flex items-center justify-between rounded-xl bg-surface-2 px-3 py-2.5"
+              >
+                <span className="flex items-center gap-2 text-[13px] font-medium text-foreground">
+                  <MessageStatus status={r.status} />
+                  {r.label}
+                </span>
+                <span className={`text-[13px] ${r.time ? 'text-muted-foreground' : 'text-muted-foreground/40'}`}>
+                  {r.time ?? '—'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 // --- Reaction Badge on message ---
@@ -336,6 +374,15 @@ export function ConversationView() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
 
+  // --- KIVO Message Status System ---
+  const [infoMsg, setInfoMsg] = useState<Message | null>(null);
+  const seenObserverRef = useRef<IntersectionObserver | null>(null);
+  const seenPendingRef = useRef<Set<string>>(new Set());
+  const seenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressFiredRef = useRef(false);
+  const { medium: hapticMedium } = useHaptics();
+
   const activeConv = conversations.find((c) => c.id === activeConversationId);
   const otherUser = activeConv?.otherUser;
   const activeTypingUsers = useMemo(
@@ -440,6 +487,16 @@ export function ConversationView() {
 
     const unsub = subscribeMessages(convId, (fsMsgs, hasMore) => {
       if (cancelled) return;
+      // KIVO status: this device received & synced incoming messages → mark
+      // them delivered (works even if the conversation is not open — the
+      // conversation list handles the previews, and the active conversation
+      // marks full messages here). Sender never self-acks.
+      const incomingSent = fsMsgs
+        .filter((m) => m.senderId !== user?.id && m.status === 'sent' && !m.deleted)
+        .map((m) => m.id);
+      if (incomingSent.length > 0) {
+        markMessagesDelivered(convId, incomingSent).catch(() => {});
+      }
       const remote = fsMsgs.map((m) => fsMessageToMessage(m, convId));
       useChatStore.setState((state) => {
         // Upsert snapshot messages into the loaded set (preserves older pages
@@ -532,6 +589,69 @@ export function ConversationView() {
     }
   }, [messages, isTyping, wasAtBottom]);
 
+  // KIVO status: mark incoming messages as `seen` when they enter the visible
+  // chat area (IntersectionObserver on the scroll container). Batched + debounced.
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container || isDemo || !user?.id || !activeConversationId) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        let changed = false;
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const el = entry.target as HTMLElement;
+          const msgId = el.dataset.msgId;
+          if (!msgId) continue;
+          const msg = useChatStore.getState().messages.find((m) => m.id === msgId);
+          if (!msg || msg.senderId === user.id || msg.deleted || msg.status === 'seen') continue;
+          seenPendingRef.current.add(msgId);
+          changed = true;
+        }
+        if (changed && !seenTimerRef.current) {
+          seenTimerRef.current = setTimeout(() => {
+            seenTimerRef.current = null;
+            const ids = [...seenPendingRef.current];
+            seenPendingRef.current.clear();
+            if (activeConversationId && ids.length > 0) {
+              markMessagesSeen(activeConversationId, ids).catch(() => {});
+            }
+          }, 350);
+        }
+      },
+      { root: container, threshold: 0.5 }
+    );
+    seenObserverRef.current = observer;
+    // Observe already-rendered incoming rows (first paint happens before this effect).
+    container.querySelectorAll<HTMLElement>('[data-msg-id]').forEach((el) => {
+      const msgId = el.dataset.msgId;
+      const msg = useChatStore.getState().messages.find((m) => m.id === msgId);
+      if (msg && msg.senderId !== user.id && !msg.deleted && msg.status !== 'seen') observer.observe(el);
+    });
+    return () => {
+      observer.disconnect();
+      seenObserverRef.current = null;
+      if (seenTimerRef.current) clearTimeout(seenTimerRef.current);
+      seenTimerRef.current = null;
+      seenPendingRef.current.clear();
+    };
+  }, [activeConversationId, isDemo, user?.id]);
+
+  // --- Long-press → Message Info panel ---
+  const startLongPress = useCallback((msg: Message) => {
+    longPressFiredRef.current = false;
+    longPressTimerRef.current = setTimeout(() => {
+      longPressFiredRef.current = true;
+      hapticMedium();
+      setInfoMsg(msg);
+    }, 500);
+  }, [hapticMedium]);
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
+
   const sendMessage = useCallback(() => {
     if (!input.trim() || !activeConversationId || !user) return;
     const content = input.trim();
@@ -553,6 +673,9 @@ export function ConversationView() {
       content,
       type: 'text',
       status,
+      sentAt: now,
+      deliveredAt: null,
+      seenAt: null,
       replyToId: replyId,
       edited: false,
       deleted: false,
@@ -670,6 +793,9 @@ export function ConversationView() {
       content: caption,
       type: 'image',
       status: 'sending',
+      sentAt: new Date().toISOString(),
+      deliveredAt: null,
+      seenAt: null,
       replyToId: replyTo?.id || null,
       edited: false,
       deleted: false,
@@ -1079,7 +1205,23 @@ export function ConversationView() {
                 animate={{ opacity: 1, y: 0, x: 0, scale: 1 }}
                 transition={{ duration: isMine ? 0.35 : 0.3, ease: [0.16, 1, 0.3, 1] }}
                 className={`mb-1 flex ${isMine ? 'justify-end' : 'justify-start'} ${showAvatar ? 'mt-3' : 'mt-0.5'} ${isFailed ? 'animate-kivo-shake' : ''}`}
-                onClick={() => setQuickReactMsgId(showQuickReact ? null : msg.id)}
+                ref={(el) => {
+                  if (!el) return;
+                  el.dataset.msgId = msg.id;
+                  // Observe incoming rows for seen-acks once the observer exists.
+                  if (seenObserverRef.current && !isDemo && user?.id) {
+                    const incoming = msg.senderId !== user.id && !msg.deleted && msg.status !== 'seen';
+                    if (incoming) seenObserverRef.current.observe(el);
+                  }
+                }}
+                onPointerDown={(e) => { if (e.pointerType === 'mouse' && e.button !== 0) return; startLongPress(msg); }}
+                onPointerUp={cancelLongPress}
+                onPointerLeave={cancelLongPress}
+                onPointerCancel={cancelLongPress}
+                onClick={() => {
+                  if (longPressFiredRef.current) { longPressFiredRef.current = false; return; }
+                  setQuickReactMsgId(showQuickReact ? null : msg.id);
+                }}
               >
                 {!isMine && (
                   <div className="w-8 shrink-0">
@@ -1179,6 +1321,9 @@ export function ConversationView() {
                     {/* Desktop action row (hover) */}
                     {isMine && !msg.deleted && isLast && (
                       <div className="absolute -bottom-3 right-0 hidden group-hover:flex items-center gap-0.5">
+                        <button onClick={(e) => { e.stopPropagation(); setInfoMsg(msg); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors" title="Message Info">
+                          <Info className="h-3 w-3 text-muted-foreground" />
+                        </button>
                         <button onClick={(e) => { e.stopPropagation(); copyMessage(msg.content); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
                           <Copy className="h-3 w-3 text-muted-foreground" />
                         </button>
@@ -1198,6 +1343,9 @@ export function ConversationView() {
                     )}
                     {!isMine && !msg.deleted && isLast && (
                       <div className="absolute -bottom-3 left-0 hidden group-hover:flex items-center gap-0.5">
+                        <button onClick={(e) => { e.stopPropagation(); setInfoMsg(msg); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors" title="Message Info">
+                          <Info className="h-3 w-3 text-muted-foreground" />
+                        </button>
                         <button onClick={(e) => { e.stopPropagation(); copyMessage(msg.content); }} className="rounded-md bg-popover p-1 shadow-sm border border-border/50 hover:bg-surface-hover transition-colors">
                           <Copy className="h-3 w-3 text-muted-foreground" />
                         </button>
@@ -1240,7 +1388,20 @@ export function ConversationView() {
                       <span className="text-[10px] text-muted-foreground/50">
                         {format(new Date(msg.createdAt), 'h:mm a')}
                       </span>
-                      {isMine && <MessageStatus status={displayStatus} />}
+                      {isMine && (
+                        <AnimatePresence mode="popLayout" initial={false}>
+                          <motion.span
+                            key={displayStatus}
+                            initial={{ scale: 0.5, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.5, opacity: 0 }}
+                            transition={{ type: 'spring', stiffness: 500, damping: 25 }}
+                            className="inline-flex"
+                          >
+                            <MessageStatus status={displayStatus} />
+                          </motion.span>
+                        </AnimatePresence>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1467,6 +1628,9 @@ export function ConversationView() {
           </button>
         </div>
       </div>
+
+      {/* KIVO Message Info panel (long-press / Info button) */}
+      <MessageInfoDialog msg={infoMsg} onClose={() => setInfoMsg(null)} />
     </div>
   );
 }

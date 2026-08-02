@@ -9,13 +9,13 @@ import { authFetch } from '@/lib/api';
 import { connectSocket, disconnectSocket } from '@/lib/socket';
 import { auth } from '@/lib/firebase';
 import { getAllQueuedMessages } from '@/lib/offline-queue';
-import { subscribeConversations, fsConversationToConversation, markConversationRead, type FSConversationDoc } from '@/lib/chat-service';
+import { subscribeConversations, fsConversationToConversation, markConversationRead, markMessagesDelivered, type FSConversationDoc } from '@/lib/chat-service';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { Search, Bell, MessageSquarePlus } from 'lucide-react';
+import { Search, Bell, MessageSquarePlus, Check, CheckCheck } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
-import type { Conversation, User } from '@/types';
+import type { Conversation, Message, User } from '@/types';
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -33,10 +33,24 @@ function getGreeting(): string {
 
 function formatTimestamp(date: string) {
   try {
-    return format(new Date(date), 'h:mm a');
+    const d = new Date(date);
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (d.toDateString() === today.toDateString()) return format(d, 'h:mm a');
+    if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+    if (d.getFullYear() === today.getFullYear()) return format(d, 'MMM d');
+    return format(d, 'MMM d, yyyy');
   } catch {
     return '';
   }
+}
+
+/** Mini KIVO status glyph for outgoing last-message previews. */
+function MiniStatusIcon({ status }: { status?: string }) {
+  if (status === 'seen') return <CheckCheck className="h-3 w-3 text-seen" />;
+  if (status === 'delivered') return <CheckCheck className="h-3 w-3 text-muted-foreground/50" />;
+  return <Check className="h-2.5 w-2.5 text-muted-foreground/40" />;
 }
 
 type FilterTab = 'all' | 'unread' | 'groups' | 'archived';
@@ -56,7 +70,7 @@ export function ConversationList() {
     conversations, activeConversationId, setActiveConversationId,
     searchQuery, setSearchQuery, setConversations,
     presenceMap, clearTypingForConversation, clearUnread,
-    setNetworkStatus, syncQueuedMessages,
+    networkStatus, setNetworkStatus, syncQueuedMessages,
   } = useChatStore();
   const { user, isDemo } = useAuthStore();
   const { setSearchOpen, setNotificationsOpen, setMobileSidebarOpen } = useUIStore();
@@ -74,6 +88,9 @@ export function ConversationList() {
   const [deletedUserIds, setDeletedUserIds] = useState<Set<string>>(new Set());
 
   const greeting = useMemo(() => getGreeting(), []);
+
+  /** KIVO status: lastMessage ids already acked as delivered this session. */
+  const deliveredAckedRef = useRef<Set<string>>(new Set());
 
   /**
    * Phase 2: conversations now live in Firestore.
@@ -139,6 +156,24 @@ export function ConversationList() {
       queueMicrotask(() => setDeletedUserIds(nextDeleted));
     }
   }, [fsConvs, friends, extraProfiles, deletedUserIds, isDemo, user?.id]);
+
+  // KIVO status: when the receiver is online and their device has synced a
+  // conversation preview whose last message is from the other user and still
+  // 'sent', ack it as delivered — the receiver does NOT need to open the chat.
+  // Deduped per session so each message is acked once. (Full history is acked
+  // as delivered/seen when the conversation is opened in conversation-view.)
+  useEffect(() => {
+    if (isDemo || !user?.id || networkStatus !== 'online') return;
+    const meId = user.id;
+    for (const c of fsConvs) {
+      const lm = c.lastMessage;
+      if (!lm || lm.senderId === meId || lm.deleted) continue;
+      if (lm.status && lm.status !== 'sent') continue; // already delivered/seen
+      if (deliveredAckedRef.current.has(lm.id)) continue;
+      deliveredAckedRef.current.add(lm.id);
+      markMessagesDelivered(c.id, [lm.id]).catch(() => {});
+    }
+  }, [fsConvs, isDemo, user?.id, networkStatus]);
 
   // Derive the app Conversation objects (keeps the UI shape unchanged).
   // Phase 3: overlay live RTDB presence (online/lastSeen) onto otherUser.
@@ -421,8 +456,11 @@ export function ConversationList() {
                       {other.displayName || other.username}
                     </span>
                     {conv.lastMessage && (
-                      <span className="text-[12px] text-muted-foreground/60 shrink-0 ml-2">
-                        {formatTimestamp(conv.lastMessage.createdAt)}
+                      <span className="flex items-center gap-1 text-[12px] text-muted-foreground/60 shrink-0 ml-2">
+                        {conv.lastMessage.senderId === user?.id && (
+                          <MiniStatusIcon status={(conv.lastMessage as Message).status} />
+                        )}
+                        <span>{formatTimestamp(conv.lastMessage.createdAt)}</span>
                       </span>
                     )}
                   </div>

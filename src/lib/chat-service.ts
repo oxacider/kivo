@@ -21,6 +21,7 @@ import {
 } from 'firebase/firestore';
 import { getFirestoreInstance } from '@/lib/firebase';
 import { authFetch } from '@/lib/api';
+import { markMessageConnectedIfOnline } from '@/lib/message-status';
 import type { Conversation, MediaAttachment, Message, Reaction, User } from '@/types';
 
 /* ------------------------------------------------------------------ */
@@ -34,6 +35,11 @@ export interface FSLastMessage {
   senderId: string;
   createdAt: string;
   deleted: boolean;
+  /** KIVO status of the previewed message (sent/delivered/seen). */
+  status?: string;
+  sentAt?: string | null;
+  deliveredAt?: string | null;
+  seenAt?: string | null;
 }
 
 export interface FSConversationDoc {
@@ -55,7 +61,14 @@ export interface FSMessageDoc {
   sender?: { id: string; displayName: string; username: string; avatar: string } | null;
   content: string;
   type: string;
-  status: 'sent' | 'delivered' | 'deleted';
+  /** KIVO lifecycle: sent → delivered → seen (written by sender/receiver devices). */
+  status: 'sent' | 'delivered' | 'seen' | 'deleted';
+  /** Server timestamp when the message reached Firestore. */
+  sentAt?: string | null;
+  /** Server timestamp when the receiver's device synced the message. */
+  deliveredAt?: string | null;
+  /** Server timestamp when the receiver opened the chat and saw the message. */
+  seenAt?: string | null;
   replyToId: string | null;
   replyTo?: { id: string; content: string; senderId: string; deleted: boolean } | null;
   edited: boolean;
@@ -156,6 +169,10 @@ function fsConvFromSnap(doc: QueryDocumentSnapshot<DocumentData>): FSConversatio
           senderId: d.lastMessage.senderId ?? '',
           createdAt: toIso(d.lastMessage.createdAt),
           deleted: d.lastMessage.deleted ?? false,
+          status: d.lastMessage.status ?? 'sent',
+          sentAt: d.lastMessage.sentAt ? toIso(d.lastMessage.sentAt) : null,
+          deliveredAt: d.lastMessage.deliveredAt ? toIso(d.lastMessage.deliveredAt) : null,
+          seenAt: d.lastMessage.seenAt ? toIso(d.lastMessage.seenAt) : null,
         }
       : null,
     unreadCount: d.unreadCount ?? {},
@@ -176,7 +193,10 @@ function fsMsgFromSnap(convId: string, doc: QueryDocumentSnapshot<DocumentData>)
     sender: d.sender ?? null,
     content: d.content ?? '',
     type: d.type ?? 'text',
-    status: d.status ?? 'sent',
+    status: (d.status ?? 'sent') as FSMessageDoc['status'],
+    sentAt: d.sentAt ? toIso(d.sentAt) : null,
+    deliveredAt: d.deliveredAt ? toIso(d.deliveredAt) : null,
+    seenAt: d.seenAt ? toIso(d.seenAt) : null,
     replyToId: d.replyToId ?? null,
     replyTo: d.replyTo ?? null,
     edited: d.edited ?? false,
@@ -211,6 +231,9 @@ export function fsMessageToMessage(fs: FSMessageDoc, conversationId: string): Me
     content: fs.content,
     type: (fs.type as Message['type']) ?? 'text',
     status: fs.deleted ? 'deleted' : fs.status,
+    sentAt: fs.sentAt ?? undefined,
+    deliveredAt: fs.deliveredAt ?? null,
+    seenAt: fs.seenAt ?? null,
     replyToId: fs.replyToId,
     replyTo: fs.replyTo
       ? {
@@ -271,7 +294,10 @@ export function fsConversationToConversation(fs: FSConversationDoc, meId: string
           senderId: fs.lastMessage.senderId,
           content: fs.lastMessage.content,
           type: fs.lastMessage.type as Message['type'],
-          status: 'sent',
+          status: (fs.lastMessage.status as Message['status']) ?? 'sent',
+          sentAt: fs.lastMessage.sentAt ?? undefined,
+          deliveredAt: fs.lastMessage.deliveredAt ?? null,
+          seenAt: fs.lastMessage.seenAt ?? null,
           replyToId: null,
           edited: false,
           deleted: fs.lastMessage.deleted,
@@ -288,20 +314,25 @@ export function fsConversationToConversation(fs: FSConversationDoc, meId: string
 
 /**
  * Derive the effective message status for display.
- * - Read receipts live on the conversation doc; a message is "read" when the
- *   other participant's readReceipts timestamp is >= the message createdAt.
- * - Local optimistic statuses (sending/queued/failed) pass through unchanged.
+ *
+ * KIVO status is now tracked per-message (sent → delivered → seen), so the
+ * message doc is the source of truth. Local optimistic statuses
+ * (sending/queued/failed) pass through unchanged. For legacy messages that
+ * predate per-message status, we fall back to the conversation readReceipts.
  */
 export function deriveMessageStatus(msg: Message, conv: Conversation | undefined, meId: string): Message['status'] {
   if (msg.status === 'sending' || msg.status === 'queued' || msg.status === 'failed') return msg.status;
   if (msg.deleted || msg.status === 'deleted') return 'deleted';
   if (msg.senderId !== meId) return msg.status;
 
+  if (msg.status === 'seen') return 'seen';
+  if (msg.status === 'delivered') return 'delivered';
+
+  // Legacy fallback: read receipts used to live on the conversation doc.
   const otherId = conv ? (conv.user1Id === meId ? conv.user2Id : conv.user1Id) : '';
   if (!otherId) return msg.status;
-
   const readAt = conv?.readReceipts?.[otherId];
-  if (readAt && readAt >= msg.createdAt) return 'read';
+  if (readAt && readAt >= msg.createdAt) return 'seen';
   return msg.status;
 }
 
@@ -404,6 +435,9 @@ export async function sendMessage(input: SendMessageInput): Promise<string> {
     content: input.content,
     type: input.type ?? 'text',
     status: 'sent',
+    sentAt: now,
+    deliveredAt: null,
+    seenAt: null,
     replyToId: input.replyToId ?? null,
     replyTo: input.replyTo
       ? { id: input.replyTo.id, content: input.replyTo.content, senderId: input.replyTo.senderId, deleted: input.replyTo.deleted }
@@ -429,6 +463,10 @@ export async function sendMessage(input: SendMessageInput): Promise<string> {
       senderId: input.sender.id,
       createdAt: now,
       deleted: false,
+      status: 'sent',
+      sentAt: now,
+      deliveredAt: null,
+      seenAt: null,
     },
     updatedAt: now,
   };
@@ -437,6 +475,16 @@ export async function sendMessage(input: SendMessageInput): Promise<string> {
   // create), so a plain update is correct and keeps the rules simple.
   batch.update(convRef, convPatch);
   await batch.commit();
+
+  // Presence-driven promotion (sending → sent → connected): the batch write
+  // above already persisted the message as `sent` (the sender's local
+  // `sending` state is optimistic-only and never persisted). If the receiver
+  // is online in KIVO right now, advance the message straight to `connected`
+  // instead of waiting for their device to ack the snapshot. Fire-and-forget
+  // so the send never blocks or fails on a presence read.
+  if (input.recipientId) {
+    void markMessageConnectedIfOnline(input.conversationId, msgRef.id, input.recipientId);
+  }
   return msgRef.id;
 }
 
@@ -510,6 +558,18 @@ export async function markConversationRead(conversationId: string, meId: string)
     [`unreadCount.${meId}`]: 0,
   });
 }
+
+/* ------------------------------------------------------------------ */
+/*  KIVO message status receipts                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Status-receipt ack helpers moved to the dedicated status engine
+ * (src/lib/message-status.ts) so every transition — including
+ * `updateMessageStatus` / `markMessageSeen` / presence-driven promotion —
+ * lives in one place. Re-exported here so existing UI imports keep working.
+ */
+export { markMessagesDelivered, markMessagesSeen } from '@/lib/message-status';
 
 /* ------------------------------------------------------------------ */
 /*  Orphan cleanup                                                     */

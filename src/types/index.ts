@@ -32,7 +32,14 @@ export interface Message {
   senderId: string;
   content: string;
   type: 'text' | 'image' | 'video' | 'file' | 'voice' | 'system';
-  status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'queued' | 'deleted';
+  /** KIVO lifecycle state: sending → sent → delivered → seen (or failed/queued/deleted). */
+  status: 'sending' | 'sent' | 'delivered' | 'seen' | 'failed' | 'queued' | 'deleted';
+  /** ISO timestamp when the message reached the KIVO server. */
+  sentAt?: string;
+  /** ISO timestamp when the receiver's device received & synced the message. */
+  deliveredAt?: string | null;
+  /** ISO timestamp when the receiver opened the chat and saw the message. */
+  seenAt?: string | null;
   replyToId: string | null;
   edited: boolean;
   deleted: boolean;

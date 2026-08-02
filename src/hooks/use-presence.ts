@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import { auth, getDatabaseInstance } from '@/lib/firebase';
 import { onValue, ref } from 'firebase/database';
-import { connectPresence, subscribePresence, disconnectPresence } from '@/lib/presence';
+import { connectPresence, subscribePresence, disconnectPresence, startPresenceHeartbeat } from '@/lib/presence';
 import { useAuthStore } from '@/stores/auth-store';
 import { useFriendsStore } from '@/stores/friends-store';
 import { useChatStore } from '@/stores/chat-store';
@@ -34,11 +34,15 @@ export function usePresence() {
     const firebaseUid = auth.currentUser?.uid ?? null;
     const goOnline = () => void connectPresence(meId, firebaseUid);
     goOnline();
+    // Keep lastSeen fresh during long sessions; disconnectPresence stops it
+    // on teardown so the offline flip can't be overwritten by a late tick.
+    const stopHeartbeat = startPresenceHeartbeat(meId);
     const unsub = onValue(ref(db, '.info/connected'), (snap) => {
       if (snap.val() === true) goOnline();
     });
     return () => {
       unsub();
+      stopHeartbeat();
       void disconnectPresence(meId);
     };
   }, [meId, isDemo]);
@@ -59,7 +63,7 @@ export function usePresence() {
       subscribePresence(userId, (presence) => {
         if (!presence) return;
         useFriendsStore.getState().applyPresence(userId, presence.online, presence.lastSeen);
-        useChatStore.getState().setPresence(userId, presence.online, presence.lastSeen);
+        useChatStore.getState().setPresence(userId, presence.online, presence.lastSeen, presence.connectionStatus);
       })
     );
 
