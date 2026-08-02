@@ -226,6 +226,12 @@
   100% { opacity: 0; transform: translateY(-100px) scale(0); }
 }
 
+@keyframes kivo-particle-float {
+  0%, 100% { opacity: 0; transform: translateY(0) scale(1); }
+  30% { opacity: 1; transform: translateY(-12px) scale(1.1); }
+  60% { opacity: 0.5; transform: translateY(-24px) scale(0.95); }
+}
+
 @keyframes kivo-gradient-shift {
   0%, 100% { background-position: 0% 50%; }
   50% { background-position: 100% 50%; }
@@ -522,4 +528,35 @@ body[data-kivo-platform="ios"] .kivo-no-select {
 /* Keyboard-aware bottom padding (for input bars in chat, etc.) */
 @utility keyboard-bottom {
   padding-bottom: var(--kivo-safe-bottom, env(safe-area-inset-bottom, 0px));
+}
+
+/* KIVO Auth Input Focus Glow */
+.auth-input-wrapper {
+  transition: box-shadow 0.25s ease, border-color 0.25s ease;
+  border-radius: var(--radius-xl);
+  border: 1px solid transparent;
+  box-shadow: 0 0 0 0 transparent;
+}
+.auth-input-wrapper:focus-within {
+  border-color: oklch(0.541 0.281 293.009 / 30%);
+  box-shadow:
+    0 0 0 3px oklch(0.541 0.281 293.009 / 12%),
+    0 0 28px oklch(0.541 0.281 293.009 / 8%);
+}
+.dark .auth-input-wrapper {
+  border-color: transparent;
+}
+.dark .auth-input-wrapper:focus-within {
+  border-color: oklch(0.623 0.258 293.009 / 35%);
+  box-shadow:
+    0 0 0 3px oklch(0.623 0.258 293.009 / 18%),
+    0 0 36px oklch(0.623 0.258 293.009 / 12%),
+    0 0 60px oklch(0.623 0.258 293.009 / 5%);
+}
+/* Inner input: strip its own ring so only the wrapper glows */
+.auth-input-wrapper input {
+  border: none !important;
+  box-shadow: none !important;
+  ring-width: 0 !important;
+  outline: none !important;
 }

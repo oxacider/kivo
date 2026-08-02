@@ -10,10 +10,10 @@ import { useAuthStore, triggerNotifications } from '@/stores/auth-store';
 import { useUIStore } from '@/stores/ui-store';
 import { api } from '@/lib/api';
 import { auth } from '@/lib/firebase';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { KivoLogo } from '@/components/kivo/kivo-logo';
+import { ArrowLeft, Loader2, User, AtSign, Mail, Lock, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
-import type { User } from '@/types';
-import Image from 'next/image';
+import type { User as UserType } from '@/types';
 
 /** Map Firebase Auth error codes to user-friendly messages. */
 function getFirebaseErrorMessage(err: any): string | null {
@@ -41,6 +41,7 @@ export function SignUpForm() {
   const { setUser, setIsDemo } = useAuthStore();
   const [form, setForm] = useState({ email: '', password: '', displayName: '', username: '' });
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [devVerificationCode, setDevVerificationCode] = useState<string | null>(null);
 
   const update = (key: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -61,7 +62,7 @@ export function SignUpForm() {
 
       // 2) Create the KIVO profile (Supabase Postgres) — email comes from the
       // verified token. api() attaches a fresh Firebase ID token automatically.
-      const data = await api<{ user: User; verificationCode?: string }>('/auth/register', {
+      const data = await api<{ user: UserType; verificationCode?: string }>('/auth/register', {
         body: { displayName: form.displayName, username: form.username },
       });
 
@@ -83,10 +84,15 @@ export function SignUpForm() {
     }
   };
 
+  const iconClass = "absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40 pointer-events-none transition-colors duration-200";
+  const toggleClass = "absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40 hover:text-foreground/70 transition-colors duration-200 cursor-pointer";
+
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6 py-12 bg-background">
+      {/* Ambient background glow */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute -right-32 top-1/4 h-96 w-96 rounded-full bg-primary/5 blur-3xl" />
+        <div className="absolute -left-20 bottom-1/3 h-72 w-72 rounded-full bg-primary/[0.03] blur-3xl" />
       </div>
 
       <motion.div
@@ -95,6 +101,7 @@ export function SignUpForm() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
       >
+        {/* Back button */}
         <button
           onClick={() => setView('welcome')}
           className="mb-6 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors w-fit"
@@ -103,24 +110,21 @@ export function SignUpForm() {
           Back
         </button>
 
-        {/* Logo */}
+        {/* Logo — using the shared KivoLogo component */}
         <div className="mb-6 flex justify-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl overflow-hidden">
-            <Image
-              src="/logo.png"
-              alt="KIVO"
-              width={56}
-              height={56}
-              priority
-              quality={100}
-              sizes="56px"
-              className="object-contain p-1"
-            />
+          <div
+            className="flex items-center justify-center rounded-2xl"
+            style={{
+              boxShadow: '0 8px 32px oklch(0.541 0.281 293.009 / 20%), 0 2px 8px oklch(0.541 0.281 293.009 / 10%)',
+            }}
+          >
+            <KivoLogo size="lg" />
           </div>
         </div>
 
         <h1 className="mb-1 text-2xl font-semibold tracking-tight">Create Account</h1>
         <p className="mb-8 text-sm text-muted-foreground">Join KIVO today</p>
+
         {devVerificationCode && (
           <div className="mb-6 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-600 dark:text-amber-400 text-center">
             Dev mode — verification code: <span className="font-mono font-bold">{devVerificationCode}</span>
@@ -128,56 +132,82 @@ export function SignUpForm() {
         )}
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          {/* Display Name */}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="displayName" className="text-xs">Display Name</Label>
-            <Input
-              id="displayName"
-              placeholder="John Doe"
-              value={form.displayName}
-              onChange={update('displayName')}
-              className="h-11 rounded-xl bg-surface-1 border-border/50"
-            />
+            <div className="auth-input-wrapper relative rounded-xl bg-surface-1">
+              <User className={iconClass} />
+              <Input
+                id="displayName"
+                placeholder="John Doe"
+                value={form.displayName}
+                onChange={update('displayName')}
+                className="h-11 pl-10 pr-4 bg-transparent"
+              />
+            </div>
           </div>
 
+          {/* Username */}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="username" className="text-xs">Username</Label>
-            <Input
-              id="username"
-              placeholder="johndoe"
-              value={form.username}
-              onChange={update('username')}
-              className="h-11 rounded-xl bg-surface-1 border-border/50"
-              autoComplete="username"
-            />
+            <div className="auth-input-wrapper relative rounded-xl bg-surface-1">
+              <AtSign className={iconClass} />
+              <Input
+                id="username"
+                placeholder="johndoe"
+                value={form.username}
+                onChange={update('username')}
+                className="h-11 pl-10 pr-4 bg-transparent"
+                autoComplete="username"
+              />
+            </div>
             <span className="text-[11px] text-muted-foreground/60">Lowercase, letters, numbers, underscores</span>
           </div>
 
+          {/* Email */}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="signup-email" className="text-xs">Email</Label>
-            <Input
-              id="signup-email"
-              type="email"
-              placeholder="you@example.com"
-              value={form.email}
-              onChange={update('email')}
-              className="h-11 rounded-xl bg-surface-1 border-border/50"
-              autoComplete="email"
-            />
+            <div className="auth-input-wrapper relative rounded-xl bg-surface-1">
+              <Mail className={iconClass} />
+              <Input
+                id="signup-email"
+                type="email"
+                placeholder="you@example.com"
+                value={form.email}
+                onChange={update('email')}
+                className="h-11 pl-10 pr-4 bg-transparent"
+                autoComplete="email"
+              />
+            </div>
           </div>
 
+          {/* Password */}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="signup-password" className="text-xs">Password</Label>
-            <Input
-              id="signup-password"
-              type="password"
-              placeholder="Min. 6 characters"
-              value={form.password}
-              onChange={update('password')}
-              className="h-11 rounded-xl bg-surface-1 border-border/50"
-              autoComplete="new-password"
-            />
+            <div className="auth-input-wrapper relative rounded-xl bg-surface-1">
+              <Lock className={iconClass} />
+              <Input
+                id="signup-password"
+                type={showPassword ? 'text' : 'password'}
+                placeholder="Min. 6 characters"
+                value={form.password}
+                onChange={update('password')}
+                className="h-11 pl-10 pr-10 bg-transparent"
+                autoComplete="new-password"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className={toggleClass}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                tabIndex={-1}
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
           </div>
 
+          {/* Submit */}
           <Button
             type="submit"
             disabled={loading || !form.email || !form.password || !form.displayName || !form.username}
