@@ -5,7 +5,7 @@ import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { useFriendsStore } from '@/stores/friends-store';
 import { useUIStore } from '@/stores/ui-store';
-import { api } from '@/lib/api';
+import { authFetch } from '@/lib/api';
 import { connectSocket, disconnectSocket } from '@/lib/socket';
 import { auth } from '@/lib/firebase';
 import { getAllQueuedMessages } from '@/lib/offline-queue';
@@ -70,6 +70,8 @@ export function ConversationList() {
   const [fsConvs, setFsConvs] = useState<FSConversationDoc[]>([]);
   /** Profiles fetched for participants not in the friends list. */
   const [extraProfiles, setExtraProfiles] = useState<Record<string, User>>({});
+  /** User IDs whose profile fetch returned 404 — the user no longer exists. */
+  const [deletedUserIds, setDeletedUserIds] = useState<Set<string>>(new Set());
 
   const greeting = useMemo(() => getGreeting(), []);
 
@@ -101,27 +103,58 @@ export function ConversationList() {
   useEffect(() => {
     if (isDemo || !user?.id || fsConvs.length === 0) return;
     const meId = user.id;
-    const known = new Set([...friends.map((f) => f.id), ...Object.keys(extraProfiles)]);
+    const known = new Set([...friends.map((f) => f.id), ...Object.keys(extraProfiles), ...deletedUserIds]);
+    let needsUpdate = false;
+    const nextDeleted = new Set(deletedUserIds);
     for (const c of fsConvs) {
       const otherId = c.participants.find((p) => p !== meId);
       if (otherId && !known.has(otherId)) {
-        api<User>('/users/' + otherId)
-          .then((u) => setExtraProfiles((prev) => (prev[otherId] ? prev : { ...prev, [otherId]: u })))
-          .catch(() => {});
+        known.add(otherId); // avoid duplicate fetches in this pass
+        // Use authFetch directly so we can distinguish 404 (user deleted)
+        // from transient errors (network, 500) which should be retried.
+        authFetch(`/api/users/${otherId}`, {}, { autoSignOut: false })
+          .then(async (res) => {
+            if (!res.ok) {
+              if (res.status === 404) {
+                // User genuinely deleted — mark for filtering.
+                needsUpdate = true;
+                nextDeleted.add(otherId);
+              }
+              // Other errors (500, 503) — skip silently; will retry on next render.
+              return;
+            }
+            const json = await res.json();
+            if (json?.success && json?.data) {
+              setExtraProfiles((prev) => (prev[otherId] ? prev : { ...prev, [otherId]: json.data as User }));
+            }
+          })
+          .catch(() => {
+            // Network error — skip silently; will retry on next render.
+          });
       }
     }
-  }, [fsConvs, friends, extraProfiles, isDemo, user?.id]);
+    if (needsUpdate) {
+      // Defer the state update so React doesn't complain about setting
+      // state inside a render-pass effect synchronously.
+      queueMicrotask(() => setDeletedUserIds(nextDeleted));
+    }
+  }, [fsConvs, friends, extraProfiles, deletedUserIds, isDemo, user?.id]);
 
   // Derive the app Conversation objects (keeps the UI shape unchanged).
   // Phase 3: overlay live RTDB presence (online/lastSeen) onto otherUser.
+  // Filter out conversations where the other participant's profile was confirmed
+  // deleted (not just pending fetch).
   useEffect(() => {
     if (!user?.id) return;
     const meId = user.id;
     const byId = new Map<string, User>();
     for (const f of friends) byId.set(f.id, f);
     for (const [id, u] of Object.entries(extraProfiles)) byId.set(id, u);
-    const mapped = fsConvs.map((c) => {
+    const mapped: Conversation[] = [];
+    for (const c of fsConvs) {
       const otherId = c.participants.find((p) => p !== meId) ?? '';
+      // Skip conversations where the other user was confirmed deleted.
+      if (deletedUserIds.has(otherId)) continue;
       const base = byId.get(otherId);
       const presence = base ? presenceMap[otherId] : undefined;
       const otherUser = base
@@ -129,10 +162,12 @@ export function ConversationList() {
           ? { ...base, online: presence.online, lastSeen: presence.lastSeen }
           : base
         : undefined;
-      return fsConversationToConversation(c, meId, otherUser);
-    });
+      // Let conversations with pending profile fetches through (otherUser may
+      // be undefined temporarily) — the extraProfiles effect will hydrate them.
+      mapped.push(fsConversationToConversation(c, meId, otherUser));
+    }
     setConversations(mapped);
-  }, [fsConvs, friends, extraProfiles, presenceMap, user?.id, setConversations]);
+  }, [fsConvs, friends, extraProfiles, presenceMap, deletedUserIds, user?.id, setConversations]);
 
   useEffect(() => {
     if (isDemo || !user?.id) return;
@@ -349,6 +384,9 @@ export function ConversationList() {
 
           {filtered.map((conv) => {
             const other = conv.otherUser;
+            // Skip conversations where the other user hasn't been resolved yet
+            // (profile fetch still pending) or was confirmed deleted.
+            if (!other) return null;
             const isActive = conv.id === activeConversationId;
             return (
               <motion.button
@@ -365,13 +403,13 @@ export function ConversationList() {
                 <div className="relative shrink-0">
                   <div className="flex h-[52px] w-[52px] items-center justify-center rounded-2xl overflow-hidden bg-surface-2">
                     <Avatar className="h-full w-full rounded-2xl">
-                      <AvatarImage src={other?.avatar || undefined} />
+                      <AvatarImage src={other.avatar || undefined} />
                       <AvatarFallback className="text-base font-semibold bg-surface-2 text-foreground">
-                        {getInitials(other?.displayName || '?')}
+                        {getInitials(other.displayName || '?')}
                       </AvatarFallback>
                     </Avatar>
                   </div>
-                  {other?.showOnline !== false && other?.online && (
+                  {other.showOnline !== false && other.online && (
                     <span className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-[2.5px] border-surface-1 bg-online" />
                   )}
                 </div>
@@ -380,7 +418,7 @@ export function ConversationList() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
                     <span className="text-[15px] font-semibold truncate text-foreground">
-                      {other?.displayName || other?.username || 'Unknown'}
+                      {other.displayName || other.username}
                     </span>
                     {conv.lastMessage && (
                       <span className="text-[12px] text-muted-foreground/60 shrink-0 ml-2">

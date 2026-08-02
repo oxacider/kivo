@@ -20,6 +20,7 @@ import {
   type QueryDocumentSnapshot,
 } from 'firebase/firestore';
 import { getFirestoreInstance } from '@/lib/firebase';
+import { authFetch } from '@/lib/api';
 import type { Conversation, MediaAttachment, Message, Reaction, User } from '@/types';
 
 /* ------------------------------------------------------------------ */
@@ -76,6 +77,10 @@ export const MESSAGE_PAGE_SIZE = 30;
  * with a deterministic ID from the sorted participant pair, so both sides
  * derive the same ID and the doc is idempotent. Rules require an accepted
  * friendship for the pair before a client may create a conversation.
+ *
+ * Before creating a new conversation, validates that both users still exist
+ * in Prisma. If the other user has been deleted, throws an error so the
+ * caller can abort gracefully instead of creating an orphan conversation.
  */
 export async function getOrCreateConversation(meId: string, otherId: string): Promise<string> {
   const db = getFirestoreInstance();
@@ -84,6 +89,26 @@ export async function getOrCreateConversation(meId: string, otherId: string): Pr
   const ref = doc(db, 'conversations', convId);
   const snap = await getDoc(ref);
   if (snap.exists()) return convId;
+
+  // Validate that the other user still exists before creating a new
+  // conversation. Skips this check for legacy conversations that already
+  // exist (above) — those will be filtered client-side if the user was
+  // later deleted.
+  try {
+    const check = await authFetch(`/api/users/${otherId}`, {}, { autoSignOut: false });
+    if (!check.ok) {
+      if (check.status === 404) {
+        throw new Error('This user account no longer exists.');
+      }
+      // Other errors (500 etc.) — allow creation to proceed; the user
+      // probably exists and the API is just temporarily unavailable.
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message === 'This user account no longer exists.') {
+      throw err;
+    }
+    // Network error or auth fetch failed — proceed anyway.
+  }
 
   // Backward compatibility: reuse a legacy server-created conversation doc for
   // the same pair (created via the old API routes with Prisma cuid ids).
@@ -484,5 +509,54 @@ export async function markConversationRead(conversationId: string, meId: string)
     [`readReceipts.${meId}`]: serverTimestamp(),
     [`unreadCount.${meId}`]: 0,
   });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Orphan cleanup                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Scan the current user's conversations and delete any whose other
+ * participant no longer exists in the Prisma database.
+ *
+ * Call sparingly (e.g. on app launch or from a background admin job).
+ * Returns the count of orphan conversations that were removed.
+ */
+export async function cleanupOrphanConversations(meId: string): Promise<number> {
+  const db = getFirestoreInstance();
+  const snap = await getDocs(
+    query(collection(db, 'conversations'), where('participants', 'array-contains', meId))
+  );
+
+  const checks = snap.docs.map(async (d) => {
+    const data = d.data();
+    const otherId = (data.participants as string[] | undefined)?.find((p) => p !== meId);
+    if (!otherId) return null;
+
+    try {
+      const res = await authFetch(`/api/users/${otherId}`, {}, { autoSignOut: false });
+      if (res.ok) return null; // user exists — keep conversation
+      if (res.status === 404) return d.ref; // confirmed deleted — clean up
+      // Transient error (500, 503 etc.) — skip; don't delete on uncertainty
+      return null;
+    } catch {
+      // Network / auth error — skip (don't delete because we can't confirm)
+      return null;
+    }
+  });
+
+  const toDelete = (await Promise.all(checks)).filter(Boolean) as ReturnType<typeof doc>[];
+
+  if (toDelete.length === 0) return 0;
+
+  // Delete in batches of 500 (Firestore limit per batch)
+  for (let i = 0; i < toDelete.length; i += 500) {
+    const batch = writeBatch(db);
+    const chunk = toDelete.slice(i, i + 500);
+    for (const ref of chunk) batch.delete(ref);
+    await batch.commit();
+  }
+
+  return toDelete.length;
 }
 
