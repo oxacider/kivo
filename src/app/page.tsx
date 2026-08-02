@@ -27,6 +27,8 @@ import { Bell } from 'lucide-react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { authFetch } from '@/lib/api';
+import { initHistory, resetHistory } from '@/lib/navigation';
+import { useIsMobile } from '@/hooks/use-mobile';
 import type { User } from '@/types';
 
 type ViewConfig = {
@@ -228,11 +230,26 @@ export default function Home() {
 function ChatLayout() {
   const { mainTab, settingsOpen, setSettingsOpen, notificationsOpen, setNotificationsOpen } = useUIStore();
   const { activeConversationId } = useChatStore();
+  const isMobile = useIsMobile();
 
   // Phase 3: RTDB presence + live online status for friends/conversations.
   usePresence();
   // Phase 4: Firestore friendships/blocks → friends store (replaces legacy API polling).
   useFriends();
+
+  // Initialise browser History API for proper back navigation.
+  // Cleanup runs when ChatLayout unmounts (e.g. sign-out → welcome).
+  useEffect(() => {
+    const cleanup = initHistory();
+    return () => {
+      cleanup();
+      resetHistory();
+    };
+  }, []);
+
+  // Track whether a conversation is open on mobile — this determines
+  // whether the bottom nav should be hidden for a full-screen chat.
+  const isMobileConversationOpen = isMobile && !!activeConversationId;
 
   return (
     <div className="flex h-full w-full">
@@ -242,14 +259,17 @@ function ChatLayout() {
       <div className="flex-1 h-full overflow-hidden">
         {mainTab === 'chat' && (
           <div className="flex h-full w-full">
-            <div className="w-full h-full md:w-80 md:min-w-80 md:border-r md:border-border/50">
+            {/* Conversation list — hidden on mobile when a conversation is open */}
+            <div className={`h-full md:w-80 md:min-w-80 md:border-r md:border-border/50 ${isMobileConversationOpen ? 'hidden' : 'w-full'}`}>
               <ConversationList />
             </div>
+            {/* Desktop: side-by-side conversation view */}
             <div className="hidden md:flex flex-1 h-full">
               <ConversationView key={activeConversationId} />
             </div>
-            {activeConversationId && (
-              <div className="flex-1 h-full md:hidden absolute inset-0 z-30 bg-background">
+            {/* Mobile: full-screen conversation overlay */}
+            {isMobileConversationOpen && (
+              <div className="flex-1 h-full md:hidden absolute inset-0 z-50 bg-background">
                 <ConversationView key={activeConversationId} />
               </div>
             )}
@@ -259,7 +279,8 @@ function ChatLayout() {
         {mainTab === 'profile' && <ProfilePage />}
       </div>
 
-      <MobileBottomNav />
+      {/* Bottom nav hidden when a mobile conversation is open (full-screen chat) */}
+      {!isMobileConversationOpen && <MobileBottomNav />}
 
       {/* Settings overlay */}
       <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>

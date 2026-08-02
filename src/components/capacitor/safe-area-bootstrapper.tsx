@@ -3,9 +3,8 @@
 import { useEffect, useCallback } from 'react';
 import { useSafeArea } from '@/hooks/use-safe-area';
 import { setStatusBarStyle, platform, isNative, hideSplash, onBackButton, exitApp } from '@/lib/capacitor';
+import { navigateBack } from '@/lib/navigation';
 import { useTheme } from 'next-themes';
-import { useUIStore } from '@/stores/ui-store';
-import { useChatStore } from '@/stores/chat-store';
 
 /**
  * Invisible bootstrapper that:
@@ -45,47 +44,11 @@ export function SafeAreaBootstrapper() {
 
   // Android hardware back button
   const handleBackButton = useCallback(() => {
-    const ui = useUIStore.getState();
-    const chat = useChatStore.getState();
-
-    // Priority 1: close search overlay
-    if (ui.searchOpen) {
-      ui.setSearchOpen(false);
-      return;
+    // Try to navigate back within the app first.
+    // If we're at the root, exit the app.
+    if (!navigateBack()) {
+      exitApp();
     }
-
-    // Priority 2: close notifications sheet
-    if (ui.notificationsOpen) {
-      ui.setNotificationsOpen(false);
-      return;
-    }
-
-    // Priority 3: close settings sheet
-    if (ui.settingsOpen) {
-      ui.setSettingsOpen(false);
-      return;
-    }
-
-    // Priority 4: close open conversation on mobile
-    if (chat.activeConversationId) {
-      chat.setActiveConversationId(null);
-      return;
-    }
-
-    // Priority 5: auth screens → go back to welcome
-    if (ui.currentView === 'signin' || ui.currentView === 'signup' || ui.currentView === 'forgot-password' || ui.currentView === 'verify-email') {
-      ui.setView('welcome');
-      return;
-    }
-
-    // Priority 6: secondary tabs → go to chat tab
-    if (ui.mainTab !== 'chat' && ui.currentView === 'chat') {
-      ui.setMainTab('chat');
-      return;
-    }
-
-    // Priority 7: on main chat view → exit app
-    exitApp();
   }, []);
 
   useEffect(() => {

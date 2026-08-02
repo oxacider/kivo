@@ -19,6 +19,7 @@ try {
 }
 
 const databaseUrl = process.env.DATABASE_URL
+const directUrl = process.env.DIRECT_URL
 
 if (!databaseUrl) {
   throw new Error('DATABASE_URL is required to load the Prisma configuration')
@@ -28,5 +29,9 @@ export default defineConfig({
   engine: 'classic',
   datasource: {
     url: databaseUrl,
+    // Direct (non-pooled) connection used by `prisma migrate` / `db push` —
+    // migrations must bypass PgBouncer. Same value as DATABASE_URL when the
+    // direct URL is not set (e.g. local dev pointing at port 5432).
+    ...(directUrl ? { directUrl } : {}),
   },
 })

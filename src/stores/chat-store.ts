@@ -3,6 +3,7 @@ import type { Message, Conversation, TypingUser, Reaction, MediaAttachment, Queu
 import { saveQueuedMessage, getAllQueuedMessages, removeQueuedMessage } from '@/lib/offline-queue';
 import { sendMessage as firestoreSendMessage } from '@/lib/chat-service';
 import { useAuthStore } from '@/stores/auth-store';
+import { schedulePushHistory } from '@/lib/navigation';
 
 export interface TypingUserData extends TypingUser {
   user?: { id: string; displayName: string; avatar: string } | null;
@@ -84,7 +85,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         c.id === id ? { ...c, ...data } : c
       ),
     })),
-  setActiveConversationId: (id) => set({ activeConversationId: id }),
+  setActiveConversationId: (id) => {
+    schedulePushHistory();
+    set({ activeConversationId: id });
+  },
   setMessages: (messages) => set({ messages }),
   prependMessages: (newMessages) =>
     set((state) => {

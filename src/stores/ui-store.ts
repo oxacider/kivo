@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { ViewType } from '@/types';
+import { schedulePushHistory } from '@/lib/navigation';
 
 export type MainTab = 'chat' | 'friends' | 'profile';
 
@@ -38,17 +39,32 @@ export const useUIStore = create<UIState>()(
       searchOpen: false,
       notificationsOpen: false,
       settingsOpen: false,
-      setView: (currentView) => set({ currentView }),
+      setView: (currentView) => {
+        schedulePushHistory();
+        set({ currentView });
+      },
       setSplashDone: (splashDone) => set({ splashDone }),
-      setMainTab: (mainTab) => set({ mainTab }),
+      setMainTab: (mainTab) => {
+        schedulePushHistory();
+        set({ mainTab });
+      },
       setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
       setMobileSidebarOpen: (mobileSidebarOpen) => set({ mobileSidebarOpen }),
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
       toggleMobileSidebar: () =>
         set((s) => ({ mobileSidebarOpen: !s.mobileSidebarOpen })),
-      setSearchOpen: (searchOpen) => set({ searchOpen }),
-      setNotificationsOpen: (notificationsOpen) => set({ notificationsOpen }),
-      setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+      setSearchOpen: (searchOpen) => {
+        schedulePushHistory();
+        set({ searchOpen });
+      },
+      setNotificationsOpen: (notificationsOpen) => {
+        schedulePushHistory();
+        set({ notificationsOpen });
+      },
+      setSettingsOpen: (settingsOpen) => {
+        schedulePushHistory();
+        set({ settingsOpen });
+      },
     }),
     {
       name: 'kivo-ui',
