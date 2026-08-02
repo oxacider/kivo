@@ -27,31 +27,23 @@ const config: CapacitorConfig = {
   appId: 'com.kivo.messenger',
   appName: 'KIVO',
   webDir: 'out',
-  server: serverUrl
-    ? {
-        url: serverUrl,
-        androidScheme: 'https',
-        // Cleartext only needed for http:// dev/LAN origins — keep production
-        // https builds hardened (cleartext defaults to false on Android).
-        cleartext: serverUrl.startsWith('http://'),
-        // Local bundled page shown when the configured server can't be
-        // reached (offline / server down) — keeps a KIVO-branded placeholder
-        // fallback even in server.url (production) mode. Generated into the
-        // webDir by .zscripts/ensure-webdir.cjs as offline.html.
-        errorPath: 'offline.html',
-        allowNavigation: [FIREBASE_AUTH_DOMAIN],
-      }
-    : undefined,
+  server: {
+    url: 'https://kivo-7276-gx3s4u8c7-oxaciders-projects.vercel.app',
+    androidScheme: 'https',
+    cleartext: false,
+    errorPath: 'offline.html',
+    allowNavigation: [FIREBASE_AUTH_DOMAIN],
+  },
   plugins: {
     SplashScreen: {
       launchShowDuration: 0,
       launchAutoHide: false,
-      backgroundColor: '#f5f3ff',
+      backgroundColor: '#0a0a10',
       showSpinner: false,
     },
     StatusBar: {
       style: 'DARK',
-      backgroundColor: '#f5f3ff',
+      backgroundColor: '#0a0a10',
     },
     PushNotifications: {
       presentationOptions: ['badge', 'sound', 'alert'],
@@ -62,8 +54,8 @@ const config: CapacitorConfig = {
     },
   },
   android: {
-    allowMixedContent: true,
-    backgroundColor: '#f5f3ff',
+    allowMixedContent: false,
+    backgroundColor: '#0a0a10',
   },
 };
 

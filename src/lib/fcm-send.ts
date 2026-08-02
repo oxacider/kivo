@@ -40,6 +40,7 @@ export interface PushPayload {
   data: {
     conversationId: string;
     senderId: string;
+    senderName?: string;
     type: 'new_message' | 'friend_request' | 'system';
   };
 }
@@ -74,13 +75,14 @@ export async function sendPushToUser(
       data: {
         conversationId: payload.data.conversationId,
         senderId: payload.data.senderId,
+        senderName: payload.data.senderName || payload.title,
         type: payload.data.type,
       },
       android: {
         notification: {
           channelId: 'kivo_messages',
           priority: 'high' as const,
-          sound: 'default',
+          sound: 'kivo_notification.wav',
           icon: 'logo',
         },
         collapseKey: payload.data.conversationId || undefined,
@@ -91,6 +93,28 @@ export async function sendPushToUser(
             sound: 'default',
             badge: 1,
           },
+        },
+      },
+      webpush: {
+        headers: {
+          TTL: '86400',
+          Urgency: 'high',
+        },
+        notification: {
+          icon: '/logo.png',
+          badge: '/logo.png',
+          tag: payload.data.conversationId
+            ? `kivo-${payload.data.conversationId}`
+            : 'kivo-notification',
+          renotify: true,
+          requireInteraction: true,
+          vibrate: [200, 100, 200],
+          timestamp: Date.now(),
+        },
+        fcmOptions: {
+          link: payload.data.conversationId
+            ? `/?chat=${payload.data.conversationId}`
+            : '/',
         },
       },
       tokens: tokenList,

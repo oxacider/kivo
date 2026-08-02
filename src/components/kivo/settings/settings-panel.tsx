@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { useAuthStore } from '@/stores/auth-store';
 import { useUIStore } from '@/stores/ui-store';
@@ -14,14 +14,204 @@ import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Switch } from '@/components/ui/switch';
 import { useTheme } from 'next-themes';
-import { ArrowLeft, Loader2, User as UserIcon, Palette, Bell, Shield, LogOut, UserX } from 'lucide-react';
+import { ArrowLeft, Loader2, User as UserIcon, Palette, Bell, Shield, LogOut, UserX, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { disconnectSocket } from '@/lib/socket';
 import { disconnectPresence } from '@/lib/presence';
+import { enableNotifications, disableNotifications, getFCMToken } from '@/lib/notifications';
+import { isNative } from '@/lib/capacitor';
 import Image from 'next/image';
 import type { User } from '@/types';
 
 function getInitials(name: string) { return name.slice(0, 2).toUpperCase(); }
+
+/* ------------------------------------------------------------------ */
+/*  Notification Settings Section (real browser permission state)     */
+/* ------------------------------------------------------------------ */
+
+function NotificationSettingsSection({ onBack }: { onBack: () => void }) {
+  const { isDemo } = useAuthStore();
+  const [permission, setPermission] = useState<NotificationPermission>(
+    typeof Notification !== 'undefined' ? Notification.permission : 'denied'
+  );
+  // Start false — only set true after confirming both permission + token exist.
+  // Avoids flicker from async token check flipping the toggle back.
+  const [notifEnabled, setNotifEnabled] = useState(false);
+  const [hasCheckedToken, setHasCheckedToken] = useState(false);
+  const [isToggling, setIsToggling] = useState(false);
+
+  // On mount, sync real permission state and verify FCM token registration.
+  useEffect(() => {
+    if (typeof Notification !== 'undefined') {
+      const p = Notification.permission;
+      setPermission(p);
+      if (p === 'granted' && !isDemo) {
+        getFCMToken().then((token) => {
+          setNotifEnabled(!!token);
+          setHasCheckedToken(true);
+        });
+      } else {
+        setNotifEnabled(false);
+        setHasCheckedToken(true);
+      }
+    } else {
+      setHasCheckedToken(true);
+    }
+  }, [isDemo]);
+
+  const handleToggle = useCallback(async (enabled: boolean) => {
+    if (isDemo || isNative) return;
+    setIsToggling(true);
+
+    if (enabled) {
+      // Request permission and register
+      const token = await enableNotifications();
+      if (token) {
+        setPermission('granted');
+        setNotifEnabled(true);
+        toast.success('Notifications enabled');
+      } else {
+        setPermission(Notification.permission);
+        setNotifEnabled(false);
+        if (Notification.permission === 'denied') {
+          toast.error('Permission denied. Enable in browser settings.');
+        } else {
+          toast.error('Could not enable notifications');
+        }
+      }
+    } else {
+      // Disable (unregister token)
+      await disableNotifications();
+      setNotifEnabled(false);
+      toast.success('Notifications disabled');
+    }
+
+    setIsToggling(false);
+  }, [isDemo]);
+
+  const handleOpenBrowserSettings = useCallback(() => {
+    // Guide users to browser notification settings
+    if (typeof window !== 'undefined') {
+      // Most browsers: opening settings via UI is the only option
+      // Show a toast with instructions
+      toast('Open your browser settings → Privacy → Notifications → Allow KIVO', {
+        duration: 8000,
+        icon: <ExternalLink className="h-4 w-4" />,
+      });
+    }
+  }, []);
+
+  const permissionLabel =
+    permission === 'granted' ? 'Allowed' :
+    permission === 'denied' ? 'Blocked' :
+    'Not configured';
+
+  const permissionColor =
+    permission === 'granted' ? 'text-green-500' :
+    permission === 'denied' ? 'text-destructive' :
+    'text-amber-500';
+
+  return (
+    <div className="min-h-screen bg-background px-4 py-6">
+      <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="mx-auto max-w-md">
+        <button onClick={onBack} className="mb-6 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
+          <ArrowLeft className="h-4 w-4" /> Back
+        </button>
+
+        <h2 className="mb-6 text-lg font-semibold">Notifications</h2>
+
+        <div className="space-y-4">
+          {/* Main toggle */}
+          <div className="flex items-center justify-between rounded-xl bg-surface-1 p-4">
+            <div className="flex-1 min-w-0 mr-3">
+              <p className="text-sm font-medium">Push Notifications</p>
+              <p className={`text-xs mt-0.5 ${permissionColor}`}>
+                {permissionLabel}
+                {!isNative && permission === 'denied' && (
+                  <button
+                    onClick={handleOpenBrowserSettings}
+                    className="ml-1.5 inline-flex items-center gap-0.5 text-primary hover:underline"
+                  >
+                    How to enable <ExternalLink className="h-3 w-3" />
+                  </button>
+                )}
+              </p>
+            </div>
+            <Switch
+              checked={notifEnabled}
+              disabled={isToggling || isDemo || isNative || permission === 'denied' || !hasCheckedToken}
+              onCheckedChange={handleToggle}
+            />
+          </div>
+
+          {/* Permission status card */}
+          {!isNative && permission !== 'granted' && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="rounded-xl bg-surface-1 p-4 border border-border/20"
+            >
+              <div className="flex items-start gap-3">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                  <Bell className="h-4 w-4 text-primary" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium">
+                    {permission === 'denied'
+                      ? 'Notifications are blocked'
+                      : 'Enable notifications'}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                    {permission === 'denied'
+                      ? 'KIVO cannot show notifications because they are blocked in your browser. Open your browser settings to allow notifications from KIVO.'
+                      : 'Receive messages instantly, even when KIVO is closed. Background notifications keep you connected.'}
+                  </p>
+                  {permission === 'default' && !isDemo && !isNative && (
+                    <button
+                      onClick={() => handleToggle(true)}
+                      disabled={isToggling}
+                      className="mt-3 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white transition-all hover:opacity-90"
+                      style={{
+                        background: 'linear-gradient(135deg, oklch(0.623 0.258 293.009), oklch(0.541 0.281 293.009))',
+                      }}
+                    >
+                      {isToggling ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Bell className="h-3 w-3" />
+                      )}
+                      Enable
+                    </button>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Info: what notifications include */}
+          <div className="rounded-xl bg-surface-1 p-4">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
+              What you'll receive
+            </p>
+            <div className="flex flex-col gap-2">
+              {[
+                { icon: '💬', label: 'New message alerts with sender name' },
+                { icon: '🔔', label: 'Background notifications when KIVO is closed' },
+                { icon: '📳', label: 'Vibration on supported devices' },
+                { icon: '🔄', label: 'Real-time message updates' },
+              ].map((item) => (
+                <div key={item.label} className="flex items-center gap-2.5">
+                  <span className="text-sm">{item.icon}</span>
+                  <span className="text-xs text-muted-foreground">{item.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
 
 export function SettingsPanel() {
   const { user, isDemo, setUser, logout } = useAuthStore();
@@ -29,7 +219,6 @@ export function SettingsPanel() {
   const { theme, setTheme } = useTheme();
   const { blockedUsers, removeBlockedUser } = useFriendsStore();
   const [section, setSection] = useState<'main' | 'edit-profile' | 'notifications' | 'privacy' | 'blocked'>('main');
-  const [notifSettings, setNotifSettings] = useState({ messages: true, friendRequests: true });
   const [privacySettings, setPrivacySettings] = useState(() => ({
     showOnline: user?.showOnline ?? true,
     showLastSeen: user?.showLastSeen ?? true,
@@ -37,17 +226,6 @@ export function SettingsPanel() {
   }));
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({ displayName: user?.displayName || '', username: user?.username || '', bio: user?.bio || '', status: user?.status || '' });
-
-  // Debounced notification settings persistence
-  const notifTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (isDemo) return;
-    if (notifTimer.current) clearTimeout(notifTimer.current);
-    notifTimer.current = setTimeout(() => {
-      // Persist locally for now; could extend to a server endpoint
-    }, 500);
-    return () => { if (notifTimer.current) clearTimeout(notifTimer.current); };
-  }, [notifSettings, isDemo]);
 
   const saveProfile = async () => {
     if (!user) return;
@@ -154,32 +332,7 @@ export function SettingsPanel() {
   }
 
   if (section === 'notifications') {
-    return (
-      <div className="min-h-screen bg-background px-4 py-6">
-        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="mx-auto max-w-md">
-          <button onClick={() => setSection('main')} className="mb-6 flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
-            <ArrowLeft className="h-4 w-4" /> Back
-          </button>
-          <h2 className="mb-6 text-lg font-semibold">Notifications</h2>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between rounded-xl bg-surface-1 p-4">
-              <div>
-                <p className="text-sm font-medium">Message Notifications</p>
-                <p className="text-xs text-muted-foreground">Get notified for new messages</p>
-              </div>
-              <Switch checked={notifSettings.messages} onCheckedChange={(v) => setNotifSettings((s) => ({ ...s, messages: v }))} />
-            </div>
-            <div className="flex items-center justify-between rounded-xl bg-surface-1 p-4">
-              <div>
-                <p className="text-sm font-medium">Friend Request Alerts</p>
-                <p className="text-xs text-muted-foreground">Get notified for friend requests</p>
-              </div>
-              <Switch checked={notifSettings.friendRequests} onCheckedChange={(v) => setNotifSettings((s) => ({ ...s, friendRequests: v }))} />
-            </div>
-          </div>
-        </motion.div>
-      </div>
-    );
+    return <NotificationSettingsSection onBack={() => setSection('main')} />;
   }
 
   if (section === 'privacy') {

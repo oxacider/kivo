@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { useChatStore } from '@/stores/chat-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { useFriendsStore } from '@/stores/friends-store';
@@ -61,6 +61,108 @@ const FILTER_TABS: { key: FilterTab; label: string }[] = [
   { key: 'groups', label: 'Groups' },
   { key: 'archived', label: 'Archived' },
 ];
+
+/* ------------------------------------------------------------------ */
+/*  Memoized Conversation Row                                          */
+/*  Only re-renders when its own data or active state changes.         */
+/* ------------------------------------------------------------------ */
+
+interface ConversationRowProps {
+  conv: Conversation;
+  isActive: boolean;
+  userId: string;
+  onSelect: (id: string) => void;
+}
+
+const ConversationRow = memo(function ConversationRow({
+  conv,
+  isActive,
+  userId,
+  onSelect,
+}: ConversationRowProps) {
+  const other = conv.otherUser;
+  const isPending = !other;
+
+  return (
+    <motion.button
+      onClick={() => onSelect(conv.id)}
+      className={`w-full flex items-center gap-3.5 rounded-2xl px-4 py-3.5 text-left transition-all duration-200 ${
+        isActive
+          ? 'bg-primary/10 ring-1 ring-primary/20'
+          : 'bg-surface-1 hover:bg-surface-hover'
+      }`}
+      whileTap={{ scale: 0.98 }}
+    >
+      {/* Avatar */}
+      <div className="relative shrink-0">
+        <div className="flex h-[52px] w-[52px] items-center justify-center rounded-2xl overflow-hidden bg-surface-2">
+          <Avatar className="h-full w-full rounded-2xl">
+            <AvatarImage src={other?.avatar || undefined} />
+            <AvatarFallback className="text-base font-semibold bg-surface-2 text-foreground">
+              {getInitials(other?.displayName || (isPending ? '..' : '?'))}
+            </AvatarFallback>
+          </Avatar>
+        </div>
+        {!isPending && other?.showOnline !== false && other?.online && (
+          <span className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-[2.5px] border-surface-1 bg-online" />
+        )}
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between">
+          <span className={`text-[15px] font-semibold truncate ${isPending ? 'text-muted-foreground' : 'text-foreground'}`}>
+            {isPending ? 'KIVO user' : other?.displayName || other?.username}
+          </span>
+          {conv.lastMessage && (
+            <span className="flex items-center gap-1 text-[12px] text-muted-foreground/60 shrink-0 ml-2">
+              {!isPending && conv.lastMessage.senderId === userId && (
+                <MiniStatusIcon status={(conv.lastMessage as Message).status} />
+              )}
+              <span>{formatTimestamp(conv.lastMessage.createdAt)}</span>
+            </span>
+          )}
+        </div>
+        <p className="mt-0.5 text-[13px] text-muted-foreground truncate leading-snug">
+          {isPending
+            ? 'Loading…'
+            : conv.lastMessage?.deleted
+              ? 'Message deleted'
+              : conv.lastMessage?.content || 'Tap to start chatting'}
+        </p>
+      </div>
+
+      {/* Unread badge */}
+      {(conv.unreadCount ?? 0) > 0 && (
+        <span className="flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full bg-primary px-2 text-[11px] font-bold text-primary-foreground">
+          {conv.unreadCount}
+        </span>
+      )}
+    </motion.button>
+  );
+}, (prev, next) => {
+  // Custom comparator: only re-render when visible fields change.
+  // Skips re-renders from Firestore snapshots that produce new conv objects
+  // with identical data.
+  return (
+    prev.isActive === next.isActive &&
+    prev.userId === next.userId &&
+    prev.onSelect === next.onSelect &&
+    prev.conv.id === next.conv.id &&
+    prev.conv.otherUser?.displayName === next.conv.otherUser?.displayName &&
+    prev.conv.otherUser?.username === next.conv.otherUser?.username &&
+    prev.conv.otherUser?.avatar === next.conv.otherUser?.avatar &&
+    prev.conv.otherUser?.online === next.conv.otherUser?.online &&
+    prev.conv.otherUser?.showOnline === next.conv.otherUser?.showOnline &&
+    prev.conv.lastMessage?.id === next.conv.lastMessage?.id &&
+    prev.conv.lastMessage?.content === next.conv.lastMessage?.content &&
+    prev.conv.lastMessage?.status === next.conv.lastMessage?.status &&
+    prev.conv.lastMessage?.senderId === next.conv.lastMessage?.senderId &&
+    prev.conv.lastMessage?.createdAt === next.conv.lastMessage?.createdAt &&
+    prev.conv.lastMessage?.deleted === next.conv.lastMessage?.deleted &&
+    prev.conv.unreadCount === next.conv.unreadCount
+  );
+});
 
 /* ------------------------------------------------------------------ */
 /*  Conversation List                                                  */
@@ -417,73 +519,15 @@ export function ConversationList() {
             </div>
           )}
 
-          {filtered.map((conv) => {
-            const other = conv.otherUser;
-            // Conversations whose other participant was confirmed deleted are
-            // filtered out in the mapping effect. A `null` here means the
-            // profile fetch is still pending — render a placeholder row so the
-            // list doesn't flicker while the profile resolves.
-            const isPending = !other;
-            const isActive = conv.id === activeConversationId;
-            return (
-              <motion.button
-                key={conv.id}
-                onClick={() => selectConversation(conv.id)}
-                className={`w-full flex items-center gap-3.5 rounded-2xl px-4 py-3.5 text-left transition-all duration-200 ${
-                  isActive
-                    ? 'bg-primary/10 ring-1 ring-primary/20'
-                    : 'bg-surface-1 hover:bg-surface-hover'
-                }`}
-                whileTap={{ scale: 0.98 }}
-              >
-                {/* Avatar */}
-                <div className="relative shrink-0">
-                  <div className="flex h-[52px] w-[52px] items-center justify-center rounded-2xl overflow-hidden bg-surface-2">
-                    <Avatar className="h-full w-full rounded-2xl">
-                      <AvatarImage src={other?.avatar || undefined} />
-                      <AvatarFallback className="text-base font-semibold bg-surface-2 text-foreground">
-                        {getInitials(other?.displayName || (isPending ? '..' : '?'))}
-                      </AvatarFallback>
-                    </Avatar>
-                  </div>
-                  {!isPending && other?.showOnline !== false && other?.online && (
-                    <span className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-[2.5px] border-surface-1 bg-online" />
-                  )}
-                </div>
-
-                {/* Content */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between">
-                    <span className={`text-[15px] font-semibold truncate ${isPending ? 'text-muted-foreground' : 'text-foreground'}`}>
-                      {isPending ? 'KIVO user' : other?.displayName || other?.username}
-                    </span>
-                    {conv.lastMessage && (
-                      <span className="flex items-center gap-1 text-[12px] text-muted-foreground/60 shrink-0 ml-2">
-                        {!isPending && conv.lastMessage.senderId === user?.id && (
-                          <MiniStatusIcon status={(conv.lastMessage as Message).status} />
-                        )}
-                        <span>{formatTimestamp(conv.lastMessage.createdAt)}</span>
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-0.5 text-[13px] text-muted-foreground truncate leading-snug">
-                    {isPending
-                      ? 'Loading…'
-                      : conv.lastMessage?.deleted
-                        ? 'Message deleted'
-                        : conv.lastMessage?.content || 'Tap to start chatting'}
-                  </p>
-                </div>
-
-                {/* Unread badge */}
-                {(conv.unreadCount ?? 0) > 0 && (
-                  <span className="flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full bg-primary px-2 text-[11px] font-bold text-primary-foreground">
-                    {conv.unreadCount}
-                  </span>
-                )}
-              </motion.button>
-            );
-          })}
+          {filtered.map((conv) => (
+            <ConversationRow
+              key={conv.id}
+              conv={conv}
+              isActive={conv.id === activeConversationId}
+              userId={user?.id || ''}
+              onSelect={selectConversation}
+            />
+          ))}
         </div>
       </div>
     </div>

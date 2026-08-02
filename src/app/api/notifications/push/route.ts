@@ -80,11 +80,12 @@ export async function POST(request: NextRequest) {
     const msgPreview = typeof preview === 'string' && preview ? String(preview).slice(0, 120) : 'New message';
 
     const attempted = await sendPushToUser(recipientId, {
-      title: 'KIVO',
-      body: `${name}: ${msgPreview}`,
+      title: name,
+      body: msgPreview,
       data: {
         conversationId,
         senderId,
+        senderName: name,
         type: 'new_message',
       },
     });

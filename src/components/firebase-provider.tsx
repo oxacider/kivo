@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth-store';
 import { useChatStore } from '@/stores/chat-store';
 import { isNative, hapticMedium } from '@/lib/capacitor';
 import { initPushSystem, type KIVONotificationData } from '@/lib/notifications';
+import { markConversationDelivered } from '@/lib/message-status';
 
 /* ------------------------------------------------------------------ */
 /*  Service Worker Registration (web only)                             */
@@ -33,12 +34,14 @@ function registerServiceWorker() {
 
 function handleForegroundMessage(payload: MessagePayload) {
   const notification = payload.notification;
-  const data = (payload.data || {}) as unknown as KIVONotificationData;
+  const data = (payload.data || {}) as unknown as KIVONotificationData & { senderName?: string };
 
   const activeId = useChatStore.getState().activeConversationId;
+  // Suppress notification if the user is already viewing this conversation
   if (activeId === data.conversationId) return;
 
-  const title = notification?.title || 'KIVO';
+  const senderName = data.senderName || 'KIVO';
+  const title = data.conversationId ? senderName : (notification?.title || 'KIVO');
   const body = notification?.body || 'You have a new message';
 
   if (!isNative && 'Notification' in window && Notification.permission === 'granted') {
@@ -47,6 +50,8 @@ function handleForegroundMessage(payload: MessagePayload) {
       icon: '/logo.png',
       badge: '/logo.png',
       tag: data.conversationId ? `kivo-${data.conversationId}` : 'kivo-notification',
+      silent: false,
+      requireInteraction: false,
       data,
     });
 
@@ -54,9 +59,15 @@ function handleForegroundMessage(payload: MessagePayload) {
       window.focus();
       if (data.conversationId) {
         useChatStore.getState().setActiveConversationId(data.conversationId);
+        // Ack delivery on notification click
+        const meId = useAuthStore.getState().user?.id;
+        if (meId) markConversationDelivered(data.conversationId, meId);
       }
       n.close();
     };
+
+    // Auto-close foreground notifications after 5s (less intrusive)
+    setTimeout(() => n.close(), 5000);
   }
 }
 

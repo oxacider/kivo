@@ -22,7 +22,7 @@
  * push-notification handlers, Capacitor background tasks, or future
  * server-side jobs.
  */
-import { doc, getDoc, updateDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, writeBatch, serverTimestamp, collection, query, where, getDocs, limit } from 'firebase/firestore';
 import { getFirestoreInstance } from '@/lib/firebase';
 import { getPresence } from '@/lib/presence';
 
@@ -161,6 +161,43 @@ export async function markMessagesDelivered(conversationId: string, messageIds: 
   // Receiver-device acks are the primary path that drives the sender's
   // conversation-list ticks — sync the preview if the last message was acked.
   void syncBatchPreviewIfAcked(conversationId, messageIds, 'delivered');
+}
+
+/**
+ * Receiver-side ack: mark all undelivered incoming messages in a
+ * conversation as `delivered`. Called from push notification handlers
+ * (foreground + tap) so the sender sees the double-tick even before the
+ * Firestore snapshot listener fires.
+ *
+ * Scoped to messages the receiver has NOT sent (senderId !== receiverId)
+ * that are still in `sent` status. Batched in chunks of 500 (Firestore
+ * limit) and capped at the 30 most recent to keep writes bounded.
+ */
+export async function markConversationDelivered(
+  conversationId: string,
+  receiverId: string
+): Promise<void> {
+  const db = getFirestoreInstance();
+  try {
+    const snap = await getDocs(
+      query(
+        collection(db, 'conversations', conversationId, 'messages'),
+        where('status', '==', 'sent'),
+        limit(30)
+      )
+    );
+    const ids: string[] = [];
+    snap.forEach((d) => {
+      if (d.data().senderId !== receiverId && !d.data().deleted) {
+        ids.push(d.id);
+      }
+    });
+    if (ids.length > 0) {
+      await markMessagesDelivered(conversationId, ids);
+    }
+  } catch (err) {
+    console.error('[message-status] markConversationDelivered failed', err);
+  }
 }
 
 /**

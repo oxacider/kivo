@@ -1,25 +1,32 @@
 'use client';
 
 import { useCallback, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useUIStore } from '@/stores/ui-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { useChatStore } from '@/stores/chat-store';
 import { useFriendsStore } from '@/stores/friends-store';
 import { SplashScreen } from '@/components/kivo/splash-screen';
-import { WelcomeScreen } from '@/components/kivo/welcome-screen';
-import { SignInForm } from '@/components/kivo/auth/sign-in-form';
-import { SignUpForm } from '@/components/kivo/auth/sign-up-form';
-import { ForgotPasswordForm } from '@/components/kivo/auth/forgot-password-form';
-import { VerifyEmailForm } from '@/components/kivo/auth/verify-email-form';
+// Chat core — loaded immediately (needed for first paint)
 import { ConversationList } from '@/components/kivo/chat/conversation-list';
 import { ConversationView } from '@/components/kivo/chat/conversation-view';
-import { SettingsPanel } from '@/components/kivo/settings/settings-panel';
 import { DesktopSidebar } from '@/components/kivo/navigation/desktop-sidebar';
 import { MobileBottomNav } from '@/components/kivo/navigation/mobile-bottom-nav';
-import { FriendsPage } from '@/components/kivo/friends/friends-page';
-import { ProfilePage } from '@/components/kivo/profile/profile-page';
-import { GlobalSearchOverlay } from '@/components/kivo/overlays/global-search-overlay';
+// Auth pages — lazy loaded (only shown to unauthenticated users)
+const WelcomeScreen = dynamic(() => import('@/components/kivo/welcome-screen').then(m => ({ default: m.WelcomeScreen })), { ssr: false });
+const SignInForm = dynamic(() => import('@/components/kivo/auth/sign-in-form').then(m => ({ default: m.SignInForm })), { ssr: false });
+const SignUpForm = dynamic(() => import('@/components/kivo/auth/sign-up-form').then(m => ({ default: m.SignUpForm })), { ssr: false });
+const ForgotPasswordForm = dynamic(() => import('@/components/kivo/auth/forgot-password-form').then(m => ({ default: m.ForgotPasswordForm })), { ssr: false });
+const VerifyEmailForm = dynamic(() => import('@/components/kivo/auth/verify-email-form').then(m => ({ default: m.VerifyEmailForm })), { ssr: false });
+// Secondary views — lazy loaded (only shown when user navigates to them)
+const SettingsPanel = dynamic(() => import('@/components/kivo/settings/settings-panel').then(m => ({ default: m.SettingsPanel })), { ssr: false });
+const FriendsPage = dynamic(() => import('@/components/kivo/friends/friends-page').then(m => ({ default: m.FriendsPage })), { ssr: false });
+const ProfilePage = dynamic(() => import('@/components/kivo/profile/profile-page').then(m => ({ default: m.ProfilePage })), { ssr: false });
+// Overlays — lazy loaded (shown on demand)
+const GlobalSearchOverlay = dynamic(() => import('@/components/kivo/overlays/global-search-overlay').then(m => ({ default: m.GlobalSearchOverlay })), { ssr: false });
+const NotificationPermissionDialog = dynamic(() => import('@/components/kivo/overlays/notification-permission-dialog').then(m => ({ default: m.NotificationPermissionDialog })), { ssr: false });
+
 import { usePresence } from '@/hooks/use-presence';
 import { useFriends } from '@/hooks/use-friends';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet';
@@ -317,6 +324,7 @@ function ChatLayout() {
       </Sheet>
 
       <GlobalSearchOverlay />
+      <NotificationPermissionDialog />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { initializeApp, getApps, type FirebaseApp } from 'firebase/app';
 import { getAuth, type Auth } from 'firebase/auth';
 import { getMessaging, isSupported, type Messaging } from 'firebase/messaging';
-import { getFirestore, type Firestore } from 'firebase/firestore';
+import { getFirestore, enableIndexedDbPersistence, type Firestore } from 'firebase/firestore';
 import { getDatabase, type Database } from 'firebase/database';
 
 /**
@@ -33,13 +33,39 @@ export const auth: Auth = getAuth(app);
 export { app };
 
 let firestore: Firestore | null = null;
+let persistenceEnabled = false;
 
 /**
  * Lazy Firestore instance (client-side chat layer — Phase 2).
  * Only call from the client (components / stores).
+ *
+ * Enables IndexedDB offline persistence on first call so cached data
+ * loads instantly while realtime updates sync in the background.
+ * Multi-tab persistence is deliberately left disabled — the single-tab
+ * IndexedDB cache is faster and avoids the multi-tab sync overhead.
  */
 export function getFirestoreInstance(): Firestore {
-  if (!firestore) firestore = getFirestore(app);
+  if (!firestore) {
+    firestore = getFirestore(app);
+    // Enable offline persistence (IndexedDB cache) — fire-and-forget.
+    // Deliberately NOT awaited: the Firebase SDK internally queues ops
+    // and delivers cached snapshots to listeners registered before
+    // persistence resolves. Awaiting would block the UI unnecessarily.
+    if (typeof window !== 'undefined' && !persistenceEnabled) {
+      persistenceEnabled = true;
+      enableIndexedDbPersistence(firestore).catch((err) => {
+        if (err.code === 'failed-precondition') {
+          // Another tab already has persistence open — safe to ignore.
+          console.info('[Firestore] Offline persistence unavailable (multi-tab).');
+        } else if (err.code === 'unimplemented') {
+          // Browser doesn't support IndexedDB (rare).
+          console.warn('[Firestore] Offline persistence not supported in this browser.');
+        } else {
+          console.error('[Firestore] Offline persistence failed:', err);
+        }
+      });
+    }
+  }
   return firestore;
 }
 

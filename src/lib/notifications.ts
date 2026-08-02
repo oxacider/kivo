@@ -9,6 +9,7 @@ import {
 } from 'firebase/messaging';
 import { api } from '@/lib/api';
 import { isNative, isAndroid, isIOS } from '@/lib/capacitor';
+import { markConversationDelivered } from '@/lib/message-status';
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -144,7 +145,17 @@ function ensureNativeListeners() {
     // Foreground notification received
     PushNotifications.addListener('pushNotificationReceived', (notification) => {
       console.info('[KIVO Push] Foreground notification:', notification.title);
-      // Optionally show in-app notification or update badge
+      // Acknowledge delivery so the sender sees double-tick without
+      // waiting for the Firestore snapshot listener to fire.
+      const data = notification.data as Record<string, string> | undefined;
+      if (data?.conversationId) {
+        // We need the receiver's KIVO user id — import the auth store
+        // lazily to avoid circular deps.
+        import('@/stores/auth-store').then(({ useAuthStore }) => {
+          const meId = useAuthStore.getState().user?.id;
+          if (meId) markConversationDelivered(data.conversationId, meId);
+        });
+      }
     });
 
     // User tapped notification (app in background or foreground)
@@ -154,14 +165,21 @@ function ensureNativeListeners() {
 
       if (conversationId) {
         console.info('[KIVO Push] Tap → conversation:', conversationId);
-        // Navigate to the conversation using Zustand store
-        // Dynamic imports avoid circular dependency at module level
+
+        // Navigate to the conversation using Zustand store.
+        // Dynamic imports avoid circular dependency at module level.
         const { useChatStore } = await import('@/stores/chat-store');
         const { useUIStore } = await import('@/stores/ui-store');
         const { useAuthStore } = await import('@/stores/auth-store');
 
         const { user } = useAuthStore.getState();
         if (user) {
+          // Acknowledge delivery on notification tap — the receiver's
+          // device has now seen the notification even if the app was
+          // closed. This bridges the gap between FCM delivery and
+          // Firestore sync.
+          markConversationDelivered(conversationId, user.id);
+
           useChatStore.getState().setActiveConversationId(conversationId);
           useUIStore.getState().setView('chat');
         }

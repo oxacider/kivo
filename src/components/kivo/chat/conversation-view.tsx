@@ -335,11 +335,15 @@ function MessageReactions({
 }) {
   if (!reactions || reactions.length === 0) return null;
 
-  const grouped = reactions.reduce<Record<string, Reaction[]>>((acc, r) => {
-    if (!acc[r.emoji]) acc[r.emoji] = [];
-    acc[r.emoji].push(r);
-    return acc;
-  }, {});
+  const grouped = useMemo(
+    () =>
+      reactions.reduce<Record<string, Reaction[]>>((acc, r) => {
+        if (!acc[r.emoji]) acc[r.emoji] = [];
+        acc[r.emoji].push(r);
+        return acc;
+      }, {}),
+    [reactions]
+  );
 
   return (
     <div className="flex flex-wrap gap-1 mt-0.5">
@@ -600,7 +604,7 @@ async function uploadChatImageWithProgress(
 }
 
 export function ConversationView() {
-  const { activeConversationId, conversations, messages, prependMessages, addMessage, updateMessage, typingUsers, setActiveConversationId, updateConversation, addReaction, removeReaction, setMessageStatus, setTyping, clearTypingForConversation, hasMoreMessages, isLoadingMoreMessages, setLoadingMoreMessages, setHasMoreMessages, networkStatus, isSyncing } = useChatStore();
+  const { activeConversationId, conversations, messages, prependMessages, addMessage, updateMessage, typingUsers, setActiveConversationId, updateConversation, addReaction, removeReaction, setMessageStatus, setTyping, clearTypingForConversation, hasMoreMessages, isLoadingMessages, isLoadingMoreMessages, setLoadingMoreMessages, setHasMoreMessages, setLoadingMessages, networkStatus, isSyncing } = useChatStore();
   const { user, isDemo } = useAuthStore();
   const [input, setInput] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
@@ -740,21 +744,29 @@ export function ConversationView() {
     if (!activeConversationId || !user?.id || isDemo) return;
     const convId = activeConversationId;
     let cancelled = false;
-    // Don't flash the previous conversation's messages while the new
-    // conversation's first snapshot is in flight. Keep queued/failed temps
-    // from other conversations in the store so they reappear when reopened
-    // (the render layer filters by the active conversation).
-    useChatStore.setState((state) => ({
-      messages: state.messages.filter(
-        (m) => m.conversationId === convId || m.status === 'queued' || m.status === 'failed'
-      ),
-    }));
+
     // Per-conversation reset (owned by this effect — never written elsewhere).
     initialLoadDoneRef.current = false;
     msgErrorShownRef.current = false;
 
+    // Check if we already have cached messages for this conversation
+    // (e.g. from a previous visit this session or offline persistence).
+    const hasCached = useChatStore
+      .getState()
+      .messages.some((m) => m.conversationId === convId);
+
+    // Only show skeleton if no cached messages exist — cached data renders
+    // instantly while Firestore syncs in the background.
+    if (!hasCached) {
+      setLoadingMessages(true);
+    }
+
     const unsub = subscribeMessages(convId, (fsMsgs, hasMore) => {
       if (cancelled) return;
+
+      // First snapshot arrived — hide skeleton (if shown).
+      setLoadingMessages(false);
+
       // KIVO status: this device received & synced incoming messages → mark
       // them delivered (works even if the conversation is not open — the
       // conversation list handles the previews, and the active conversation
@@ -803,6 +815,7 @@ export function ConversationView() {
       }
     }, (err) => {
       if (cancelled) return;
+      setLoadingMessages(false);
       console.error('[chat] message subscription error', err);
       if (!msgErrorShownRef.current) {
         msgErrorShownRef.current = true;
@@ -811,7 +824,7 @@ export function ConversationView() {
     });
 
     return () => { cancelled = true; unsub(); };
-  }, [activeConversationId, user?.id, isDemo, setHasMoreMessages]);
+  }, [activeConversationId, user?.id, isDemo, setHasMoreMessages, setLoadingMessages]);
 
   // Mark the conversation as read when a new message from the other user
   // arrives while it's open (avoids a write on every snapshot).
@@ -1328,14 +1341,17 @@ export function ConversationView() {
   }, [activeConversationId, user, addReaction, removeReaction]);
 
   // Exclude messages the user chose "Delete for me" on (device-local hide).
-  const filteredMessages = (searchMsg
-    ? messages.filter(
-        (m) =>
-          m.conversationId === activeConversationId &&
-          m.content.toLowerCase().includes(searchMsg.toLowerCase())
-      )
-    : messages.filter((m) => m.conversationId === activeConversationId)
-  ).filter((m) => !deletedForMeIds.includes(m.id));
+  // Memoized: only recomputes when messages, search, or deleted ids change.
+  const filteredMessages = useMemo(() => {
+    const base = searchMsg
+      ? messages.filter(
+          (m) =>
+            m.conversationId === activeConversationId &&
+            m.content.toLowerCase().includes(searchMsg.toLowerCase())
+        )
+      : messages.filter((m) => m.conversationId === activeConversationId);
+    return base.filter((m) => !deletedForMeIds.includes(m.id));
+  }, [messages, activeConversationId, searchMsg, deletedForMeIds]);
 
   if (!activeConversationId) {
     return (
@@ -1452,6 +1468,18 @@ export function ConversationView() {
 
       {/* ========== MESSAGES AREA ========== */}
       <div ref={scrollRef} onScroll={handleScroll} className="relative flex-1 overflow-y-auto">
+        {/* Skeleton loading — shown only on first-open conversations with no cached data */}
+        {isLoadingMessages && filteredMessages.length === 0 && (
+          <div className="flex flex-col gap-2.5 px-4 pt-4 pb-2">
+            {[0.7, 0.55, 0.8, 0.45, 0.65, 0.5, 0.75, 0.4].map((w, i) => (
+              <div
+                key={i}
+                className={`rounded-2xl h-9 bg-surface-2 animate-pulse ${i % 2 === 0 ? 'self-end' : 'self-start'}`}
+                style={{ width: `${Math.max(30, w * 100)}%` }}
+              />
+            ))}
+          </div>
+        )}
         {/* Offline banner */}
         <OfflineBanner />
         <div className="mx-auto max-w-2xl px-4 py-4">
