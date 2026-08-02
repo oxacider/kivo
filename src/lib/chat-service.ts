@@ -21,6 +21,7 @@ import {
 } from 'firebase/firestore';
 import { getFirestoreInstance } from '@/lib/firebase';
 import { authFetch } from '@/lib/api';
+import { getPresence } from '@/lib/presence';
 import { markMessageConnectedIfOnline } from '@/lib/message-status';
 import type { Conversation, MediaAttachment, Message, Reaction, User } from '@/types';
 
@@ -484,8 +485,60 @@ export async function sendMessage(input: SendMessageInput): Promise<string> {
   // so the send never blocks or fails on a presence read.
   if (input.recipientId) {
     void markMessageConnectedIfOnline(input.conversationId, msgRef.id, input.recipientId);
+    // Step 3.2 — offline push: if the receiver is NOT actively connected,
+    // their device won't sync via Firestore immediately, so notify them via
+    // FCM (server route uses the existing DeviceToken system).
+    void maybePushToOfflineRecipient(input);
   }
   return msgRef.id;
+}
+
+/**
+ * Step 3.2 — offline push.
+ *
+ * After a message is persisted, check the receiver's live presence. If they
+ * are actively connected (online + realtime connection active), the Firestore
+ * snapshot will reach their device and the status engine advances the message
+ * to `connected` — no push needed. Otherwise, ask the server to send an FCM
+ * push to the receiver's registered devices.
+ *
+ * Fire-and-forget: never blocks or fails the send.
+ */
+async function maybePushToOfflineRecipient(input: SendMessageInput): Promise<void> {
+  const { recipientId, conversationId, sender } = input;
+  if (!recipientId) return;
+  try {
+    const presence = await getPresence(recipientId);
+    // Actively connected — Firestore snapshot will deliver; skip the push.
+    if (presence?.online && presence.connectionStatus === 'online') return;
+
+    const preview =
+      input.type === 'image' || (input.attachments?.length ?? 0) > 0
+        ? '📷 Photo'
+        : (input.content || '').slice(0, 100);
+
+    const res = await authFetch(
+      '/api/notifications/push',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipientId,
+          conversationId,
+          senderId: sender.id,
+          senderName: sender.displayName || sender.username || 'Someone',
+          preview,
+        }),
+      },
+      { autoSignOut: false }
+    );
+    if (!res.ok) {
+      console.warn('[chat-service] offline push rejected:', res.status, res.statusText);
+    }
+  } catch (err) {
+    // Presence read or push request failed — never fail the send.
+    console.warn('[chat-service] offline push skipped:', err);
+  }
 }
 
 export async function editMessage(conversationId: string, messageId: string, content: string): Promise<void> {

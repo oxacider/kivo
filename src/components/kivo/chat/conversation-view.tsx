@@ -34,6 +34,8 @@ import {
   markMessagesSeen,
 } from '@/lib/chat-service';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { useHaptics } from '@/hooks/use-haptics';
 import type { Message, Reaction, PendingImage, MediaAttachment, QueuedMessage } from '@/types';
 
@@ -65,6 +67,7 @@ const QUICK_REACTIONS = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
 
 function DateDivider({ date }: { date: string }) {
   const d = new Date(date);
+  if (isNaN(d.getTime())) return null;
   const today = new Date();
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
@@ -75,7 +78,11 @@ function DateDivider({ date }: { date: string }) {
   } else if (d.toDateString() === yesterday.toDateString()) {
     label = 'Yesterday';
   } else {
-    label = format(d, 'MMMM d, yyyy');
+    try {
+      label = format(d, 'MMMM d, yyyy');
+    } catch {
+      return null; // invalid date — skip the divider entirely
+    }
   }
 
   return (
@@ -85,6 +92,18 @@ function DateDivider({ date }: { date: string }) {
       </span>
     </div>
   );
+}
+
+/** Safe time formatter — never throws on invalid/missing dates. */
+function safeFormatTime(value?: string | null): string {
+  if (!value) return '';
+  try {
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return '';
+    return format(d, 'h:mm a');
+  } catch {
+    return '';
+  }
 }
 
 function formatLastSeen(dateStr: string): string {
@@ -97,28 +116,48 @@ function formatLastSeen(dateStr: string): string {
 
 // --- KIVO Message Status Icon ---
 // ◷ Sending · ✓ Sent · ✓✓ Connected (gray) · ✓✓ Seen (blue)
+const STATUS_LABELS: Partial<Record<Message['status'], string>> = {
+  sending: 'Sending',
+  sent: 'Sent',
+  delivered: 'Connected',
+  seen: 'Seen',
+  queued: 'Queued',
+  failed: 'Failed',
+};
+
 function MessageStatus({ status, className = '' }: { status: Message['status']; className?: string }) {
+  const label = STATUS_LABELS[status];
+  const a11y = label ? { title: label, 'aria-label': label } : {};
+
   if (status === 'failed') {
-    return <AlertCircle className={`h-3.5 w-3.5 text-destructive ${className}`} />;
+    return <AlertCircle {...a11y} className={`h-3.5 w-3.5 text-destructive ${className}`} />;
   }
   if (status === 'queued') {
-    return <Clock className={`h-3.5 w-3.5 text-amber-500 ${className}`} />;
+    return <Clock {...a11y} className={`h-3.5 w-3.5 text-amber-500 ${className}`} />;
   }
   if (status === 'sending') {
-    return <span className={`inline-flex items-center text-[13px] leading-none animate-kivo-sending-spin ${className}`}>◷</span>;
+    return (
+      <span {...a11y} className={`inline-flex items-center text-[13px] leading-none animate-kivo-sending-spin ${className}`}>
+        ◷
+      </span>
+    );
   }
   if (status === 'seen') {
-    return <CheckCheck className={`h-3.5 w-3.5 text-seen ${className}`} />;
+    return <CheckCheck {...a11y} className={`h-3.5 w-3.5 text-seen ${className}`} />;
   }
   if (status === 'delivered') {
-    return <CheckCheck className={`h-3.5 w-3.5 text-muted-foreground/60 ${className}`} />;
+    return <CheckCheck {...a11y} className={`h-3.5 w-3.5 text-muted-foreground/70 ${className}`} />;
   }
-  return <Check className={`h-3 w-3 text-muted-foreground/40 ${className}`} />;
+  if (status === 'deleted') {
+    // Deleted messages show no lifecycle tick.
+    return null;
+  }
+  return <Check {...a11y} className={`h-3 w-3 text-muted-foreground/60 ${className}`} />;
 }
 
 // --- KIVO Message Info Panel (long-press) ---
 function MessageInfoDialog({ msg, onClose }: { msg: Message | null; onClose: () => void }) {
-  const fmt = (t?: string | null) => (t ? format(new Date(t), 'h:mm a') : null);
+  const fmt = (t?: string | null) => (t ? safeFormatTime(t) || null : null);
   const rows: { label: string; status: Message['status']; time: string | null }[] = [
     { label: 'Sent', status: 'sent', time: fmt(msg?.sentAt ?? msg?.createdAt) },
     { label: 'Connected', status: 'delivered', time: fmt(msg?.deliveredAt) },
@@ -151,6 +190,134 @@ function MessageInfoDialog({ msg, onClose }: { msg: Message | null; onClose: () 
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+// --- KIVO Message Actions Sheet (long-press / right-click menu) ---
+function MessageActionsSheet({
+  msg,
+  isMine,
+  onClose,
+  onReact,
+  onOpenPicker,
+  onCopy,
+  onReply,
+  onForward,
+  onInfo,
+  onEdit,
+  onDeleteForMe,
+  onDeleteEveryone,
+}: {
+  msg: Message | null;
+  isMine: boolean;
+  onClose: () => void;
+  onReact: (emoji: string) => void;
+  onOpenPicker: () => void;
+  onCopy: () => void;
+  onReply: () => void;
+  onForward: () => void;
+  onInfo: () => void;
+  onEdit: () => void;
+  onDeleteForMe: () => void;
+  onDeleteEveryone: () => void;
+}) {
+  if (!msg) return null;
+  const isDeleted = msg.deleted || msg.status === 'deleted';
+  const canEdit = isMine && !isDeleted && msg.type === 'text';
+
+  const rows: { icon: React.ReactNode; label: string; onClick: () => void; danger?: boolean }[] = [
+    { icon: <CornerDownRight className="h-[18px] w-[18px]" />, label: 'Reply', onClick: onReply },
+    { icon: <Copy className="h-[18px] w-[18px]" />, label: 'Copy', onClick: onCopy },
+    { icon: <Forward className="h-[18px] w-[18px]" />, label: 'Forward', onClick: onForward },
+  ];
+  if (!isDeleted) {
+    rows.push({ icon: <Info className="h-[18px] w-[18px]" />, label: 'Message Info', onClick: onInfo });
+  }
+  if (canEdit) {
+    rows.push({ icon: <Edit3 className="h-[18px] w-[18px]" />, label: 'Edit', onClick: onEdit });
+  }
+  if (!isDeleted) {
+    rows.push({ icon: <Trash2 className="h-[18px] w-[18px]" />, label: 'Delete for me', onClick: onDeleteForMe });
+  }
+  if (isMine && !isDeleted) {
+    rows.push({ icon: <Trash2 className="h-[18px] w-[18px]" />, label: 'Delete for everyone', onClick: onDeleteEveryone, danger: true });
+  }
+
+  return (
+    <Sheet open={!!msg} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <SheetContent side="bottom" className="rounded-t-3xl border-t border-border/40 px-2 pb-6">
+        <SheetHeader className="px-4 pb-2">
+          <SheetTitle className="text-sm font-medium text-muted-foreground">Message actions</SheetTitle>
+          {/* Message preview */}
+          <div className="mt-1 flex items-center gap-2 rounded-2xl bg-surface-2 px-3 py-2.5">
+            {msg.sender?.avatar && (
+              <Avatar className="h-8 w-8 shrink-0">
+                <AvatarImage src={msg.sender.avatar || undefined} />
+                <AvatarFallback className="text-[10px] bg-surface-2 text-foreground">{getInitials(msg.sender.displayName || '?')}</AvatarFallback>
+              </Avatar>
+            )}
+            <div className="min-w-0 flex-1">
+              {isMine && (
+                <p className="text-[11px] font-medium text-primary">You</p>
+              )}
+              <p className={`truncate text-[13px] ${isDeleted ? 'italic text-muted-foreground/60' : 'text-foreground'}`}>
+                {isDeleted ? 'This message was deleted' : msg.content || (msg.type === 'image' ? '📷 Photo' : '')}
+              </p>
+            </div>
+            <span className="shrink-0 text-[10px] text-muted-foreground/50">{safeFormatTime(msg.createdAt)}</span>
+          </div>
+        </SheetHeader>
+
+        {/* Quick reactions — react without leaving the menu.
+            Hidden for the user's own messages: handleReact ignores
+            self-reactions (legacy), so the row would be dead UI. */}
+        {!isMine && !isDeleted && (
+          <div className="px-2 pb-1">
+            <div className="flex items-center justify-between rounded-2xl bg-surface-2 px-3 py-2">
+              <span className="text-[11px] font-medium text-muted-foreground">React</span>
+              <div className="flex items-center gap-0.5">
+                {QUICK_REACTIONS.map((emoji) => (
+                  <motion.button
+                    key={emoji}
+                    whileHover={{ scale: 1.2 }}
+                    whileTap={{ scale: 0.8 }}
+                    onClick={(e) => { e.stopPropagation(); onReact(emoji); onClose(); }}
+                    className="flex h-9 w-9 items-center justify-center rounded-full text-lg hover:bg-surface-hover transition-colors"
+                  >
+                    {emoji}
+                  </motion.button>
+                ))}
+                <div className="mx-1 h-4 w-px bg-border/50" />
+                <button
+                  onClick={(e) => { e.stopPropagation(); onOpenPicker(); onClose(); }}
+                  title="More reactions"
+                  className="flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground hover:bg-surface-hover hover:text-foreground transition-colors"
+                >
+                  <Smile className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-col gap-0.5 px-2">
+          {rows.map((row) => (
+            <button
+              key={row.label}
+              onClick={() => { row.onClick(); onClose(); }}
+              className={`flex items-center gap-3 rounded-xl px-3 py-3 text-left text-[14px] font-medium transition-colors ${
+                row.danger
+                  ? 'text-destructive hover:bg-destructive/10'
+                  : 'text-foreground hover:bg-surface-hover'
+              }`}
+            >
+              <span className={`shrink-0 ${row.danger ? 'text-destructive' : 'text-muted-foreground'}`}>{row.icon}</span>
+              {row.label}
+            </button>
+          ))}
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -226,7 +393,18 @@ function QuickReactionBar({ onReact, onOpenPicker }: { onReact: (emoji: string) 
         </motion.button>
       ))}
       {onOpenPicker && (
-        <div className="w-px h-4 bg-border/50 mx-0.5" />
+        <>
+          <div className="w-px h-4 bg-border/50 mx-0.5" />
+          <motion.button
+            whileHover={{ scale: 1.2 }}
+            whileTap={{ scale: 0.8 }}
+            onClick={(e) => { e.stopPropagation(); onOpenPicker(); }}
+            className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:bg-surface-hover hover:text-foreground transition-colors"
+            title="More reactions"
+          >
+            <Smile className="h-4 w-4" />
+          </motion.button>
+        </>
       )}
     </motion.div>
   );
@@ -353,6 +531,74 @@ function UploadProgressBar({ progress }: { progress: number }) {
   );
 }
 
+/**
+ * Upload an image file to the KIVO media API with XHR progress reporting.
+ *
+ * Fetches a FRESH Firebase ID token at send time (never cached) and retries
+ * ONCE with a forced refresh on 401, matching authFetch. Returns the persisted
+ * MediaAttachment on success; throws on any failure.
+ */
+async function uploadChatImageWithProgress(
+  file: File,
+  onProgress: (progress: number) => void
+): Promise<MediaAttachment> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const uploadWithToken = (token: string) =>
+    new Promise<{ status: number; text: string }>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/media/upload');
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+      xhr.onload = () => resolve({ status: xhr.status, text: xhr.responseText });
+      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.send(formData);
+    });
+
+  let token = await auth.currentUser?.getIdToken();
+  if (!token) throw new Error('Not authenticated');
+
+  let result = await uploadWithToken(token);
+
+  // 401 → force-refresh token and retry ONCE.
+  if (result.status === 401) {
+    token = await auth.currentUser?.getIdToken(true);
+    if (!token) throw new Error('Session expired. Please sign in again.');
+    result = await uploadWithToken(token);
+    if (result.status === 401) {
+      // Retry failed — sign out + redirect to login.
+      await signOutAndRedirect();
+      throw new Error('Session expired. Please sign in again.');
+    }
+  }
+
+  if (result.status < 200 || result.status >= 300) {
+    throw new Error('Upload failed');
+  }
+
+  let res: { success?: boolean; data?: Record<string, unknown>; error?: string };
+  try {
+    res = JSON.parse(result.text);
+  } catch {
+    throw new Error('Upload failed');
+  }
+  if (!res.success || !res.data?.id) throw new Error(res.error || 'Upload failed');
+
+  return {
+    id: String(res.data.id),
+    type: 'image',
+    url: String(res.data.url || ''),
+    name: String(res.data.name || file.name),
+    size: Number(res.data.size || file.size),
+    mimeType: String(res.data.mimeType || file.type),
+    width: res.data.width ? Number(res.data.width) : undefined,
+    height: res.data.height ? Number(res.data.height) : undefined,
+  };
+}
+
 export function ConversationView() {
   const { activeConversationId, conversations, messages, prependMessages, addMessage, updateMessage, typingUsers, setActiveConversationId, updateConversation, addReaction, removeReaction, setMessageStatus, setTyping, clearTypingForConversation, hasMoreMessages, isLoadingMoreMessages, setLoadingMoreMessages, setHasMoreMessages, networkStatus, isSyncing } = useChatStore();
   const { user, isDemo } = useAuthStore();
@@ -365,6 +611,8 @@ export function ConversationView() {
   const [showSearch, setShowSearch] = useState(false);
   const [searchMsg, setSearchMsg] = useState('');
   const [quickReactMsgId, setQuickReactMsgId] = useState<string | null>(null);
+  /** Message whose full reaction emoji picker is open. */
+  const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -376,6 +624,13 @@ export function ConversationView() {
 
   // --- KIVO Message Status System ---
   const [infoMsg, setInfoMsg] = useState<Message | null>(null);
+  /** Message whose actions sheet is open (long-press / right-click). */
+  const [actionMsg, setActionMsg] = useState<Message | null>(null);
+  /** Message awaiting "Delete for everyone" confirmation. */
+  const [deleteEveryoneMsg, setDeleteEveryoneMsg] = useState<Message | null>(null);
+  /** Message IDs hidden locally via "Delete for me". */
+  const deletedForMeIds = useChatStore((s) => s.deletedForMeIds);
+  const deleteMessageForMe = useChatStore((s) => s.deleteMessageForMe);
   const seenObserverRef = useRef<IntersectionObserver | null>(null);
   const seenPendingRef = useRef<Set<string>>(new Set());
   const seenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -393,6 +648,19 @@ export function ConversationView() {
   const typingDisplay = activeTypingUsers.length === 1
     ? activeTypingUsers[0]
     : null;
+  /** Human label for the indicator — handles 1, 2 and 3+ typers. */
+  const typingLabel = useMemo(() => {
+    if (activeTypingUsers.length === 0) return '';
+    const names = activeTypingUsers
+      .map((t) => t.user?.displayName)
+      .filter(Boolean) as string[];
+    if (names.length === 1 && activeTypingUsers.length === 1) return `${names[0]} is typing`;
+    if (names.length === 2 && activeTypingUsers.length === 2) {
+      return `${names[0]} and ${names[1]} are typing`;
+    }
+    if (activeTypingUsers.length >= 3) return `${activeTypingUsers.length} people are typing`;
+    return 'Someone is typing';
+  }, [activeTypingUsers]);
 
   // Track scroll position + trigger pagination
   const loadMoreTriggeredRef = useRef(false);
@@ -563,6 +831,15 @@ export function ConversationView() {
     if (!activeConversationId || !user?.id || isDemo) return;
     const convId = activeConversationId;
     const unsub = subscribeTyping(convId, (typing) => {
+      const present = new Set(Object.keys(typing));
+      // Remove entries whose nodes vanished entirely from the snapshot (a
+      // peer may delete its node instead of flipping isTyping to false) —
+      // otherwise a stale "typing…" lingers until the next snapshot.
+      useChatStore
+        .getState()
+        .typingUsers
+        .filter((t) => t.conversationId === convId && !present.has(t.userId))
+        .forEach((t) => setTyping(t.userId, convId, false));
       for (const [uid, data] of Object.entries(typing)) {
         setTyping(uid, convId, Boolean(data?.isTyping), data?.user ?? null);
       }
@@ -570,6 +847,10 @@ export function ConversationView() {
     return () => {
       unsub();
       clearTypingForConversation(convId);
+      // Clear our own RTDB typing node on conversation switch / unmount so
+      // the other side never sees a stuck indicator (onDisconnect only fires
+      // on real connection loss, not navigation).
+      if (user?.id && !isDemo) setTypingState(convId, user.id, false).catch(() => {});
     };
   }, [activeConversationId, user?.id, isDemo, setTyping]);
 
@@ -579,6 +860,11 @@ export function ConversationView() {
       if (typingTimeout.current) clearTimeout(typingTimeout.current);
     };
   }, []);
+
+  // Close the reaction picker when switching conversations.
+  useEffect(() => {
+    setReactionPickerMsgId(null);
+  }, [activeConversationId]);
 
   // Scroll to bottom on new messages (only if already at bottom)
   useEffect(() => {
@@ -636,15 +922,20 @@ export function ConversationView() {
     };
   }, [activeConversationId, isDemo, user?.id]);
 
-  // --- Long-press → Message Info panel ---
+  // --- Long-press / right-click → Message Actions sheet ---
+  const openMessageActions = useCallback((msg: Message) => {
+    longPressFiredRef.current = true;
+    setQuickReactMsgId(null);
+    setReactionPickerMsgId(null);
+    setActionMsg(msg);
+  }, []);
   const startLongPress = useCallback((msg: Message) => {
     longPressFiredRef.current = false;
     longPressTimerRef.current = setTimeout(() => {
-      longPressFiredRef.current = true;
       hapticMedium();
-      setInfoMsg(msg);
+      openMessageActions(msg);
     }, 500);
-  }, [hapticMedium]);
+  }, [hapticMedium, openMessageActions]);
   const cancelLongPress = useCallback(() => {
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
@@ -813,95 +1104,24 @@ export function ConversationView() {
     setShowEmoji(false);
     if (inputRef.current) inputRef.current.style.height = 'auto';
 
-    // Upload using XMLHttpRequest for progress tracking. The Firebase ID
-    // token is fetched FRESH at send time (never cached) and the request is
-    // retried ONCE with a forced refresh on 401, matching authFetch.
-    const formData = new FormData();
-    formData.append('file', pendingImage.file);
-    formData.append('width', String(pendingImage.width));
-    formData.append('height', String(pendingImage.height));
-
-    const uploadWithToken = (token: string) =>
-      new Promise<{ status: number; text: string }>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/api/media/upload');
-        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) setUploadProgress(Math.round((e.loaded / e.total) * 100));
-        };
-        xhr.onload = () => resolve({ status: xhr.status, text: xhr.responseText });
-        xhr.onerror = () => reject(new Error('Network error during upload'));
-        xhr.send(formData);
-      });
-
     (async () => {
       try {
-        let token = await auth.currentUser?.getIdToken();
-        if (!token) {
-          setMessageStatus(tempId, 'failed');
-          toast.error('Not authenticated');
-          return;
-        }
-        let result = await uploadWithToken(token);
-
-        // 401 → force-refresh token and retry ONCE.
-        if (result.status === 401) {
-          token = await auth.currentUser?.getIdToken(true);
-          if (!token) {
-            setMessageStatus(tempId, 'failed');
-            toast.error('Session expired. Please sign in again.');
-            return;
-          }
-          result = await uploadWithToken(token);
-          if (result.status === 401) {
-            // Retry failed — sign out + redirect to login.
-            await signOutAndRedirect();
-            setMessageStatus(tempId, 'failed');
-            return;
-          }
-        }
-
-        if (result.status >= 200 && result.status < 300) {
-          try {
-            const res = JSON.parse(result.text);
-            if (res.success && res.data?.id) {
-              const realAttachment: MediaAttachment = {
-                id: res.data.id,
-                type: 'image',
-                url: res.data.url || pendingImage.dataUrl,
-                name: pendingImage.name,
-                size: pendingImage.size,
-                mimeType: pendingImage.mimeType,
-                width: pendingImage.width,
-                height: pendingImage.height,
-              };
-              // Update optimistic message with the real attachment
-              updateMessage(tempId, { attachments: [realAttachment] });
-              // Phase 2: send via Firestore with the uploaded attachment
-              firestoreSendMessage({
-                conversationId: activeConversationId,
-                sender: user,
-                recipientId,
-                content: caption,
-                type: 'image',
-                replyToId: optimisticMsg.replyToId,
-                attachments: [realAttachment],
-                tempId,
-              })
-                .then(() => updateMessage(tempId, { status: 'sent' }))
-                .catch(() => setMessageStatus(tempId, 'failed'));
-            } else {
-              setMessageStatus(tempId, 'failed');
-              toast.error(res.error || 'Upload failed');
-            }
-          } catch {
-            setMessageStatus(tempId, 'failed');
-            toast.error('Upload failed');
-          }
-        } else {
-          setMessageStatus(tempId, 'failed');
-          toast.error('Upload failed');
-        }
+        const realAttachment = await uploadChatImageWithProgress(pendingImage.file, setUploadProgress);
+        // Update optimistic message with the real attachment
+        updateMessage(tempId, { attachments: [realAttachment] });
+        // Phase 2: send via Firestore with the uploaded attachment
+        firestoreSendMessage({
+          conversationId: activeConversationId,
+          sender: user,
+          recipientId,
+          content: caption,
+          type: 'image',
+          replyToId: optimisticMsg.replyToId,
+          attachments: [realAttachment],
+          tempId,
+        })
+          .then(() => updateMessage(tempId, { status: 'sent' }))
+          .catch(() => setMessageStatus(tempId, 'failed'));
       } catch (err: any) {
         setMessageStatus(tempId, 'failed');
         toast.error(err?.message || 'Upload failed');
@@ -920,14 +1140,40 @@ export function ConversationView() {
     }
   }, [pendingImage, sendImageMessage, sendMessage]);
 
-  const retryMessage = useCallback((msg: Message) => {
-    if (!activeConversationId || msg.status !== 'failed' || !user) return;
+  const retryMessage = useCallback(async (msg: Message) => {
+    if (!activeConversationId || msg.status !== 'failed' || !user || isUploading) return;
     const recipientId = useChatStore
       .getState()
       .conversations.find((c) => c.id === activeConversationId)
       ?.participants?.find((p) => p !== user.id);
     // Update locally to 'sending'
     updateMessage(msg.id, { status: 'sending' });
+
+    let attachments = msg.attachments ?? [];
+    // Image message whose upload never completed still holds a local dataUrl
+    // attachment — re-upload the bytes so the receiver gets a real URL.
+    if (msg.type === 'image' && attachments.length > 0 && attachments[0].url.startsWith('data:')) {
+      try {
+        // Flag upload before any await so a second Retry tap can't slip through
+        // the async window and start a parallel upload.
+        setIsUploading(true);
+        const blob = await (await fetch(attachments[0].url)).blob();
+        const file = new File([blob], attachments[0].name || 'image', {
+          type: attachments[0].mimeType || 'image/jpeg',
+        });
+        const real = await uploadChatImageWithProgress(file, setUploadProgress);
+        attachments = [{ ...attachments[0], ...real, url: real.url, id: real.id }];
+        updateMessage(msg.id, { attachments });
+      } catch (err: any) {
+        updateMessage(msg.id, { status: 'failed' });
+        toast.error(err?.message || 'Upload failed — try again');
+        return;
+      } finally {
+        setIsUploading(false);
+        setUploadProgress(0);
+      }
+    }
+
     firestoreSendMessage({
       conversationId: activeConversationId,
       sender: user,
@@ -935,11 +1181,12 @@ export function ConversationView() {
       content: msg.content,
       type: msg.type,
       replyToId: msg.replyToId,
+      attachments,
       tempId: msg.id.startsWith('temp-') ? msg.id : undefined,
     })
       .then(() => updateMessage(msg.id, { status: 'sent' }))
       .catch(() => updateMessage(msg.id, { status: 'failed' }));
-  }, [activeConversationId, user, updateMessage]);
+  }, [activeConversationId, user, isUploading, updateMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -986,6 +1233,30 @@ export function ConversationView() {
     try {
       await firestoreDeleteMessage(activeConversationId, msgId);
       updateMessage(msgId, { content: 'This message was deleted', deleted: true, status: 'deleted' } as Partial<Message>);
+    } catch (err: any) { toast.error(err.message); }
+  };
+
+  const deleteForMe = (msg: Message) => {
+    if (isDemo) { toast.info('Demo mode'); return; }
+    deleteMessageForMe(msg.id);
+    toast.success('Message deleted for you');
+  };
+
+  const confirmDeleteEveryone = (msg: Message) => {
+    if (isDemo) { toast.info('Demo mode'); return; }
+    setDeleteEveryoneMsg(msg);
+  };
+
+  const runDeleteEveryone = async () => {
+    const msg = deleteEveryoneMsg;
+    setDeleteEveryoneMsg(null);
+    if (!msg) return;
+    if (isDemo) { toast.info('Demo mode'); return; }
+    if (!activeConversationId) return;
+    try {
+      await firestoreDeleteMessage(activeConversationId, msg.id);
+      updateMessage(msg.id, { content: 'This message was deleted', deleted: true, status: 'deleted' } as Partial<Message>);
+      toast.success('Message deleted for everyone');
     } catch (err: any) { toast.error(err.message); }
   };
 
@@ -1056,15 +1327,17 @@ export function ConversationView() {
     setQuickReactMsgId(null);
   }, [activeConversationId, user, addReaction, removeReaction]);
 
-  const filteredMessages = searchMsg
+  // Exclude messages the user chose "Delete for me" on (device-local hide).
+  const filteredMessages = (searchMsg
     ? messages.filter(
         (m) =>
           m.conversationId === activeConversationId &&
           m.content.toLowerCase().includes(searchMsg.toLowerCase())
       )
-    : messages.filter((m) => m.conversationId === activeConversationId);
+    : messages.filter((m) => m.conversationId === activeConversationId)
+  ).filter((m) => !deletedForMeIds.includes(m.id));
 
-  if (!activeConversationId || !otherUser) {
+  if (!activeConversationId) {
     return (
       <div className="flex h-full flex-col items-center justify-center bg-background">
         <div className="text-center">
@@ -1073,6 +1346,25 @@ export function ConversationView() {
           </div>
           <h3 className="text-sm font-medium text-muted-foreground">Select a conversation</h3>
           <p className="mt-1 text-xs text-muted-foreground/60">Choose a chat to start messaging</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Conversation is selected but the other participant's profile hasn't
+  // resolved (deleted account or profile fetch still in flight).
+  if (!otherUser) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center bg-background">
+        <div className="text-center">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl overflow-hidden">
+            <Avatar className="h-14 w-14">
+              <AvatarImage src={undefined} />
+              <AvatarFallback className="text-lg font-semibold bg-surface-2 text-muted-foreground">?</AvatarFallback>
+            </Avatar>
+          </div>
+          <h3 className="text-sm font-medium text-muted-foreground">Conversation unavailable</h3>
+          <p className="mt-1 text-xs text-muted-foreground/60">This account is no longer available.</p>
         </div>
       </div>
     );
@@ -1103,14 +1395,14 @@ export function ConversationView() {
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate">{otherUser.displayName || otherUser.username}</p>
               <p className="text-[11px] text-muted-foreground">
-                {isTyping && typingDisplay ? (
+                {isTyping ? (
                   <motion.span
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     className="text-typing font-medium"
                   >
-                    {typingDisplay.user?.displayName || 'Someone'} is typing
+                    {typingLabel}
                   </motion.span>
                 ) : otherUser.showOnline !== false && otherUser.online ? (
                   <span className="text-online">Online</span>
@@ -1218,6 +1510,7 @@ export function ConversationView() {
                 onPointerUp={cancelLongPress}
                 onPointerLeave={cancelLongPress}
                 onPointerCancel={cancelLongPress}
+                onContextMenu={(e) => { e.preventDefault(); openMessageActions(msg); }}
                 onClick={() => {
                   if (longPressFiredRef.current) { longPressFiredRef.current = false; return; }
                   setQuickReactMsgId(showQuickReact ? null : msg.id);
@@ -1295,14 +1588,15 @@ export function ConversationView() {
                       <>
                         {isMine ? (
                           <div className="absolute -top-8 right-0 hidden group-hover:flex z-10">
-                            <QuickReactionBar
-                              onReact={(emoji) => handleReact(msg.id, emoji)}
-                            />
+                            {/* No onOpenPicker on own messages: handleReact ignores
+                                self-reactions, so the picker button would be dead UI. */}
+                            <QuickReactionBar onReact={(emoji) => handleReact(msg.id, emoji)} />
                           </div>
                         ) : (
                           <div className="absolute -top-8 left-0 hidden group-hover:flex z-10">
                             <QuickReactionBar
                               onReact={(emoji) => handleReact(msg.id, emoji)}
+                              onOpenPicker={() => setReactionPickerMsgId(msg.id)}
                             />
                           </div>
                         )}
@@ -1313,7 +1607,10 @@ export function ConversationView() {
                     {showQuickReact && !msg.deleted && !isSending && (
                       <div className={`absolute -top-8 ${isMine ? 'right-0' : 'left-0'} flex z-10 md:hidden`}>
                         <AnimatePresence>
-                          <QuickReactionBar onReact={(emoji) => handleReact(msg.id, emoji)} />
+                          <QuickReactionBar
+                            onReact={(emoji) => handleReact(msg.id, emoji)}
+                            onOpenPicker={isMine ? undefined : () => setReactionPickerMsgId(msg.id)}
+                          />
                         </AnimatePresence>
                       </div>
                     )}
@@ -1386,9 +1683,9 @@ export function ConversationView() {
                   {isLast && (
                     <div className={`mt-0.5 flex items-center gap-1 ${isMine ? 'justify-end' : 'justify-start'} px-1`}>
                       <span className="text-[10px] text-muted-foreground/50">
-                        {format(new Date(msg.createdAt), 'h:mm a')}
+                        {safeFormatTime(msg.createdAt)}
                       </span>
-                      {isMine && (
+                      {isMine && !msg.deleted && (
                         <AnimatePresence mode="popLayout" initial={false}>
                           <motion.span
                             key={displayStatus}
@@ -1440,7 +1737,7 @@ export function ConversationView() {
                     ))}
                   </div>
                   <span className="text-[11px] text-muted-foreground/60 font-medium">
-                    {typingDisplay?.user?.displayName || 'Someone'} is typing
+                    {typingLabel}
                   </span>
                 </div>
               </motion.div>
@@ -1629,8 +1926,71 @@ export function ConversationView() {
         </div>
       </div>
 
-      {/* KIVO Message Info panel (long-press / Info button) */}
+      {/* KIVO Message Info panel (Info action) */}
       <MessageInfoDialog msg={infoMsg} onClose={() => setInfoMsg(null)} />
+
+      {/* Full reaction emoji picker (more reactions) */}
+      <Dialog open={!!reactionPickerMsgId} onOpenChange={(o) => { if (!o) setReactionPickerMsgId(null); }}>
+        <DialogContent className="max-w-xs" showCloseButton>
+          <DialogHeader>
+            <DialogTitle className="text-base">Add Reaction</DialogTitle>
+            <DialogDescription className="sr-only">Choose an emoji to react with</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-wrap gap-1.5 pt-1 max-h-64 overflow-y-auto">
+            {EMOJI_LIST.map((emoji) => (
+              <motion.button
+                key={emoji}
+                whileHover={{ scale: 1.15 }}
+                whileTap={{ scale: 0.85 }}
+                onClick={() => {
+                  if (reactionPickerMsgId) handleReact(reactionPickerMsgId, emoji);
+                  setReactionPickerMsgId(null);
+                }}
+                className="flex h-10 w-10 items-center justify-center rounded-xl text-xl hover:bg-surface-hover transition-colors"
+              >
+                {emoji}
+              </motion.button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* KIVO Message Actions sheet (long-press / right-click) */}
+      <MessageActionsSheet
+        msg={actionMsg}
+        isMine={!!actionMsg && actionMsg.senderId === user?.id}
+        onClose={() => setActionMsg(null)}
+        onCopy={() => { if (actionMsg) copyMessage(actionMsg.content || ''); }}
+        onReply={() => { if (actionMsg) { setReplyTo(actionMsg); inputRef.current?.focus(); } }}
+        onForward={() => { if (actionMsg) forwardMessage(actionMsg); }}
+        onInfo={() => { if (actionMsg) { setInfoMsg(actionMsg); } }}
+        onEdit={() => { if (actionMsg) startEdit(actionMsg); }}
+        onDeleteForMe={() => { if (actionMsg) deleteForMe(actionMsg); }}
+        onDeleteEveryone={() => { if (actionMsg) confirmDeleteEveryone(actionMsg); }}
+        onReact={(emoji) => { if (actionMsg) handleReact(actionMsg.id, emoji); }}
+        onOpenPicker={() => { if (actionMsg) setReactionPickerMsgId(actionMsg.id); }}
+      />
+
+      {/* Delete for everyone confirmation */}
+      <AlertDialog open={!!deleteEveryoneMsg} onOpenChange={(o) => { if (!o) setDeleteEveryoneMsg(null); }}>
+        <AlertDialogContent className="max-w-sm rounded-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-base">Delete for everyone?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete this message for everyone in the conversation. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="rounded-xl">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={runDeleteEveryone}
+              className="rounded-xl bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

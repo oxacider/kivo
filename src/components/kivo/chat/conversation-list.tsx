@@ -419,9 +419,11 @@ export function ConversationList() {
 
           {filtered.map((conv) => {
             const other = conv.otherUser;
-            // Skip conversations where the other user hasn't been resolved yet
-            // (profile fetch still pending) or was confirmed deleted.
-            if (!other) return null;
+            // Conversations whose other participant was confirmed deleted are
+            // filtered out in the mapping effect. A `null` here means the
+            // profile fetch is still pending — render a placeholder row so the
+            // list doesn't flicker while the profile resolves.
+            const isPending = !other;
             const isActive = conv.id === activeConversationId;
             return (
               <motion.button
@@ -438,13 +440,13 @@ export function ConversationList() {
                 <div className="relative shrink-0">
                   <div className="flex h-[52px] w-[52px] items-center justify-center rounded-2xl overflow-hidden bg-surface-2">
                     <Avatar className="h-full w-full rounded-2xl">
-                      <AvatarImage src={other.avatar || undefined} />
+                      <AvatarImage src={other?.avatar || undefined} />
                       <AvatarFallback className="text-base font-semibold bg-surface-2 text-foreground">
-                        {getInitials(other.displayName || '?')}
+                        {getInitials(other?.displayName || (isPending ? '..' : '?'))}
                       </AvatarFallback>
                     </Avatar>
                   </div>
-                  {other.showOnline !== false && other.online && (
+                  {!isPending && other?.showOnline !== false && other?.online && (
                     <span className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-[2.5px] border-surface-1 bg-online" />
                   )}
                 </div>
@@ -452,12 +454,12 @@ export function ConversationList() {
                 {/* Content */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
-                    <span className="text-[15px] font-semibold truncate text-foreground">
-                      {other.displayName || other.username}
+                    <span className={`text-[15px] font-semibold truncate ${isPending ? 'text-muted-foreground' : 'text-foreground'}`}>
+                      {isPending ? 'KIVO user' : other?.displayName || other?.username}
                     </span>
                     {conv.lastMessage && (
                       <span className="flex items-center gap-1 text-[12px] text-muted-foreground/60 shrink-0 ml-2">
-                        {conv.lastMessage.senderId === user?.id && (
+                        {!isPending && conv.lastMessage.senderId === user?.id && (
                           <MiniStatusIcon status={(conv.lastMessage as Message).status} />
                         )}
                         <span>{formatTimestamp(conv.lastMessage.createdAt)}</span>
@@ -465,9 +467,11 @@ export function ConversationList() {
                     )}
                   </div>
                   <p className="mt-0.5 text-[13px] text-muted-foreground truncate leading-snug">
-                    {conv.lastMessage?.deleted
-                      ? 'Message deleted'
-                      : conv.lastMessage?.content || 'Tap to start chatting'}
+                    {isPending
+                      ? 'Loading…'
+                      : conv.lastMessage?.deleted
+                        ? 'Message deleted'
+                        : conv.lastMessage?.content || 'Tap to start chatting'}
                   </p>
                 </div>
 

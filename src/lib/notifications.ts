@@ -1,5 +1,12 @@
 import { getMessagingInstance, VAPID_KEY } from '@/lib/firebase';
-import { getToken, deleteToken as fbDeleteToken } from 'firebase/messaging';
+import {
+  getToken,
+  deleteToken as fbDeleteToken,
+  onRegistered,
+  onUnregistered,
+  register,
+  unregister,
+} from 'firebase/messaging';
 import { api } from '@/lib/api';
 import { isNative, isAndroid, isIOS } from '@/lib/capacitor';
 
@@ -196,6 +203,58 @@ async function deleteFCMRegistration(): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Web FCM Token Refresh (Firebase v12 FID lifecycle)               */
+/* ------------------------------------------------------------------ */
+
+let webLifecycleUnsubs: (() => void)[] = [];
+
+/**
+ * Subscribe to FCM web token rotation.
+ *
+ * Firebase 12+ uses FID-based registration: `register()` establishes the
+ * FID identity and re-syncs when the FID changes (device reinstall, weekly
+ * refresh, pushsubscriptionchange). `onRegistered` delivers the current
+ * FID, which the backend stores as the push target — so a rotated token
+ * is automatically re-registered here. `onUnregistered` fires when an FID
+ * is no longer active, so we auto-remove it from the backend (invalid
+ * tokens are cleaned up without waiting for a failed send).
+ *
+ * Idempotent — safe to call from enableNotifications on every login.
+ * Never throws.
+ */
+export function setupWebTokenRefresh(): void {
+  if (isNative || webLifecycleUnsubs.length > 0) return;
+
+  getMessagingInstance()
+    .then((messaging) => {
+      if (!messaging) return;
+      // New / rotated FID → register with the KIVO backend.
+      webLifecycleUnsubs.push(
+        onRegistered(messaging, (fid) => {
+          saveTokenToServer(fid, 'web').catch(() => {});
+          console.info('[KIVO FCM] Token (re)registered and saved.');
+        })
+      );
+      // FID invalidated → remove from the KIVO backend automatically.
+      webLifecycleUnsubs.push(
+        onUnregistered(messaging, (fid) => {
+          removeTokenFromServer(fid).catch(() => {});
+          console.info('[KIVO FCM] Token unregistered, removed from backend.');
+        })
+      );
+      // Establish registration; re-syncs on FID change or weekly refresh.
+      register(messaging, { vapidKey: VAPID_KEY }).catch(() => {});
+    })
+    .catch(() => {});
+}
+
+/** Unsubscribe the web lifecycle listeners (disable flow). */
+function teardownWebTokenRefresh(): void {
+  for (const unsub of webLifecycleUnsubs) unsub();
+  webLifecycleUnsubs = [];
+}
+
+/* ------------------------------------------------------------------ */
 /*  High-Level API                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -236,6 +295,10 @@ export async function enableNotifications(): Promise<string | null> {
     }
 
     await saveTokenToServer(token, 'web');
+    // Start listening for FCM web token rotation so refreshed tokens
+    // stay registered on the backend (stale tokens are auto-removed at
+    // send time by fcm-send).
+    setupWebTokenRefresh();
     console.info('[KIVO FCM] Token saved successfully (device: web).');
     return token;
   } catch (err) {
@@ -254,6 +317,13 @@ export async function disableNotifications(): Promise<void> {
       await removeTokenFromServer(nativePushToken);
       nativePushToken = null;
     } else {
+      // v12: unregister the FID while the onUnregistered listener is still
+      // active so it auto-removes the token from the backend; then tear down.
+      const messaging = await getMessagingInstance();
+      if (messaging) {
+        await unregister(messaging).catch(() => {});
+      }
+      teardownWebTokenRefresh();
       const token = await getFCMToken();
       if (token) {
         await removeTokenFromServer(token);

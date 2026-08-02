@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthUser } from '@/lib/auth';
-import { registerToken, removeToken } from '@/lib/notification-service';
+import { registerToken, removeToken, isValidFCMToken } from '@/lib/notification-service';
 
 /* ------------------------------------------------------------------ */
 /*  POST /api/notifications/token                                     */
@@ -21,8 +21,8 @@ export async function POST(request: NextRequest) {
   }
 
   const { token, platform = 'web' } = body;
-  if (!token || typeof token !== 'string') {
-    return NextResponse.json({ error: 'Token is required' }, { status: 400 });
+  if (!token || typeof token !== 'string' || !isValidFCMToken(token)) {
+    return NextResponse.json({ error: 'Invalid token' }, { status: 400 });
   }
   if (!['web', 'android', 'ios'].includes(platform)) {
     return NextResponse.json({ error: 'Invalid platform' }, { status: 400 });

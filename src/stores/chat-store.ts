@@ -26,6 +26,8 @@ interface ChatState {
   isSyncing: boolean;
   /** Phase 3: live RTDB presence map keyed by kivoId. */
   presenceMap: Record<string, { online: boolean; lastSeen: string; connectionStatus?: PresenceConnectionStatus }>;
+  /** Message IDs the current user chose "Delete for me" on (device-local). */
+  deletedForMeIds: string[];
   setConversations: (conversations: Conversation[]) => void;
   addConversation: (conversation: Conversation) => void;
   updateConversation: (id: string, data: Partial<Conversation>) => void;
@@ -49,6 +51,7 @@ interface ChatState {
   addReaction: (messageId: string, reaction: Reaction) => void;
   removeReaction: (messageId: string, userId: string, emoji: string) => void;
   setMessageStatus: (messageId: string, status: Message['status']) => void;
+  deleteMessageForMe: (messageId: string) => void;
   setNetworkStatus: (status: NetworkStatus) => void;
   syncQueuedMessages: () => Promise<void>;
   reset: () => void;
@@ -67,7 +70,34 @@ const initialState = {
   networkStatus: 'online' as NetworkStatus,
   isSyncing: false,
   presenceMap: {} as Record<string, { online: boolean; lastSeen: string; connectionStatus?: PresenceConnectionStatus }>,
+  deletedForMeIds: [],
 };
+
+/* ------------------------------------------------------------------ */
+/*  "Delete for me" — device-local hidden message IDs (localStorage)  */
+/* ------------------------------------------------------------------ */
+
+const DELETED_FOR_ME_KEY = 'kivo-deleted-for-me';
+
+function loadDeletedForMe(): string[] {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(DELETED_FOR_ME_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDeletedForMe(ids: string[]): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(DELETED_FOR_ME_KEY, JSON.stringify(ids));
+  } catch {
+    // Storage full / unavailable — the hide still applies for this session.
+  }
+}
 
 function isOnline(): boolean {
   return typeof navigator !== 'undefined' ? navigator.onLine : true;
@@ -75,6 +105,8 @@ function isOnline(): boolean {
 
 export const useChatStore = create<ChatState>()((set, get) => ({
   ...initialState,
+  // Hydrate "Delete for me" hidden IDs from localStorage (device-local).
+  deletedForMeIds: loadDeletedForMe(),
   setConversations: (conversations) => set({ conversations }),
   addConversation: (conversation) =>
     set((state) => ({
@@ -177,6 +209,17 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         m.id === messageId ? { ...m, status } : m
       ),
     })),
+  deleteMessageForMe: (messageId) =>
+    set((state) => {
+      // Device-local only — the message stays in Firestore for everyone else.
+      if (state.deletedForMeIds.includes(messageId)) return state;
+      const deletedForMeIds = [...state.deletedForMeIds, messageId];
+      saveDeletedForMe(deletedForMeIds);
+      return {
+        deletedForMeIds,
+        messages: state.messages.filter((m) => m.id !== messageId),
+      };
+    }),
   setNetworkStatus: (networkStatus) => set({ networkStatus }),
   setPresence: (userId, online, lastSeen, connectionStatus) =>
     set((state) => ({
@@ -235,5 +278,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
     set({ isSyncing: false });
   },
-  reset: () => set(initialState),
+  // Reload deletedForMe from localStorage on reset (e.g. logout → re-login in
+  // the same session) so locally-hidden messages stay hidden.
+  reset: () => set({ ...initialState, deletedForMeIds: loadDeletedForMe() }),
 }));
