@@ -10,8 +10,14 @@ function generateCode(): string {
 
 export async function POST(request: Request) {
   try {
-    const { email, password, displayName, username } = await request.json();
+    console.log("========== REGISTER ROUTE HIT ==========");
+    console.log(process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID);
+    const body = await request.json();
+    const { email, password, displayName, username } = body;
     const authHeader = request.headers.get('authorization');
+
+    // Temporary debug: log received body keys only (never log values/passwords)
+    console.log('[Register] Received body keys:', Object.keys(body));
 
     let userEmail = email;
     let hashedPassword: string | null = null;
@@ -21,15 +27,22 @@ export async function POST(request: Request) {
     let firebaseUid: string | null = null;
     if (authHeader?.startsWith('Bearer ')) {
       const fb = await verifyFirebaseIdToken(authHeader.slice(7));
+      console.log('[Register] Firebase token verification:', fb ? `uid=${fb.uid} email=${fb.email}` : 'FAILED — returned null');
       if (fb?.email) {
         isFirebase = true;
         userEmail = fb.email;
         firebaseUid = fb.uid;
       }
+    } else {
+      console.log('[Register] No Bearer token in Authorization header');
     }
 
     if (!userEmail || !displayName || !username) {
-      return errorResponse('All fields are required');
+      // Surface why userEmail is missing: Firebase token absent/invalid vs body omitted
+      const reason = authHeader?.startsWith('Bearer ')
+        ? 'Authentication failed. Please try signing up again.'
+        : 'All fields are required';
+      return errorResponse(reason);
     }
 
     if (!/^[a-z0-9_]{3,30}$/.test(username)) {
