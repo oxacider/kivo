@@ -38,6 +38,12 @@ export function useFriends() {
       (docs) => {
         if (cancelled) return;
         const { friends, pendingRequests, sentRequests } = deriveFriendshipState(docs, meId);
+        console.info('[friends] useFriends derived state:', {
+          meId,
+          friends: friends.map(f => f.id),
+          pending: pendingRequests.map(r => ({ id: r.id, senderId: r.senderId, receiverId: r.receiverId })),
+          sent: sentRequests.map(r => ({ id: r.id, senderId: r.senderId, receiverId: r.receiverId })),
+        });
         const store = useFriendsStore.getState();
         store.setFriends(friends);
         store.setPendingRequests(pendingRequests);

@@ -123,13 +123,28 @@ export function FriendsPage() {
   };
 
   const handleSendRequest = async (target: UserType) => {
-    if (!user) return;
+    if (!user) {
+      console.error('[friends] handleSendRequest: user is null — cannot send request');
+      toast.error('Please sign in again');
+      return;
+    }
+    console.info('[friends] handleSendRequest clicked:', {
+      senderId: user.id,
+      senderEmail: user.email,
+      targetId: target.id,
+      targetEmail: target.email,
+      targetDisplayName: target.displayName,
+    });
     try {
       const result = await sendFriendRequest(user, target);
+      console.info('[friends] handleSendRequest success:', { fsId: result.id });
       addSentRequest(result);
       setFriendStatus(target.id, 'pending_sent');
       toast.success('Friend request sent');
-    } catch (err: any) { toast.error(err.message || 'Failed to send request'); }
+    } catch (err: any) {
+      console.error('[friends] handleSendRequest failed:', err);
+      toast.error(err.message || 'Failed to send request');
+    }
   };
 
   const handleBlockUser = async (target: UserType) => {
@@ -183,12 +198,20 @@ export function FriendsPage() {
   // Load friend statuses and mutual counts for search results (Firestore reads)
   useEffect(() => {
     if (activeTab !== 'add' || searchResults.length === 0 || !user || isDemo) return;
+    console.info('[friends] Loading statuses for search results:', {
+      myId: user.id,
+      resultCount: searchResults.length,
+      resultIds: searchResults.map((u) => u.id),
+    });
     (async () => {
       const statuses = await Promise.all(
         searchResults.map(async (u) => {
           try {
             return await getFriendStatusWith(user.id, u.id);
-          } catch { return null; }
+          } catch (err) {
+            console.error('[friends] getFriendStatusWith failed for:', u.id, err);
+            return null;
+          }
         })
       );
       statuses.forEach((s, i) => {

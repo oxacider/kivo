@@ -33,14 +33,20 @@ export async function ensureFirestoreUserMapping(
 ): Promise<void> {
   try {
     const fs = await getAdminFirestore();
-    if (!fs) return;
+    if (!fs) {
+      console.error('[firestore-admin] Admin Firestore unavailable — user mapping NOT created');
+      return;
+    }
     const docRef = fs.collection('users').doc(firebaseUid);
     const snap = await docRef.get();
-    if (!snap.exists) {
-      await docRef.set({ kivoId });
+    // Only write if the mapping is missing or stale — avoids unnecessary
+    // writes on every session restore.
+    if (!snap.exists || snap.data()?.kivoId !== kivoId) {
+      await docRef.set({ kivoId }, { merge: true });
+      console.info('[firestore-admin] User mapping upserted:', { firebaseUid, kivoId });
     }
   } catch (err) {
-    console.error('[firestore-admin] ensureFirestoreUserMapping failed', err);
+    console.error('[firestore-admin] ensureFirestoreUserMapping failed:', err);
   }
 }
 

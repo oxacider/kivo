@@ -32,7 +32,8 @@ import { useFriends } from '@/hooks/use-friends';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Bell } from 'lucide-react';
 import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
+import { auth, getFirestoreInstance } from '@/lib/firebase';
 import { authFetch } from '@/lib/api';
 import { initHistory, resetHistory } from '@/lib/navigation';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -141,8 +142,30 @@ export default function Home() {
                 routeAfterRestore(existing);
                 return;
               }
+
+              // Try to resolve the KIVO user id from the Firestore uid→kivoId
+              // mapping. If the mapping doesn't exist, Firestore rules will
+              // block all friendship/conversation reads & writes — but the
+              // chat UI will still render, letting the user see sign-up flow.
+              let kivoId: string | null = null;
+              try {
+                const db = getFirestoreInstance();
+                const mappingSnap = await getDoc(doc(db, 'users', firebaseUser.uid));
+                if (mappingSnap.exists()) {
+                  kivoId = mappingSnap.data().kivoId || null;
+                }
+              } catch {
+                // Firestore may not be ready yet — proceed with fallback.
+              }
+              if (!kivoId) {
+                console.warn(
+                  '[session] No kivoId mapping found for firebaseUid:',
+                  firebaseUser.uid,
+                  '— friend requests and Firestore features will fail until registration completes.'
+                );
+              }
               const hydrated: User = {
-                id: firebaseUser.uid,
+                id: kivoId || firebaseUser.uid,
                 email: firebaseUser.email || '',
                 displayName: firebaseUser.displayName || '',
                 username: (firebaseUser.email || '').split('@')[0] || firebaseUser.uid,

@@ -213,10 +213,22 @@ export function subscribeFriendships(
 ): Unsubscribe {
   const db = getFirestoreInstance();
   const q = query(collection(db, 'friendships'), where('participants', 'array-contains', meId));
+  console.info('[friends] subscribeFriendships starting for:', meId);
   return onSnapshot(
     q,
-    (snap) => onChange(snap.docs.map(fsFriendshipFromSnap)),
-    (err) => onError?.(err)
+    (snap) => {
+      const docs = snap.docs.map(fsFriendshipFromSnap);
+      console.info('[friends] subscribeFriendships snapshot:', {
+        meId,
+        docCount: docs.length,
+        docs: docs.map((d) => ({ id: d.id, status: d.status, requester: d.requesterId, receiver: d.receiverId })),
+      });
+      onChange(docs);
+    },
+    (err) => {
+      console.error('[friends] subscribeFriendships error:', err);
+      onError?.(err);
+    }
   );
 }
 
@@ -252,10 +264,21 @@ export async function sendFriendRequest(me: User, receiver: User): Promise<Frien
   const db = getFirestoreInstance();
   const id = friendshipPairKey(me.id, receiver.id);
   const ref = doc(db, 'friendships', id);
+
+  console.info('[friends] sendFriendRequest:', {
+    fsId: id,
+    senderId: me.id,
+    senderEmail: me.email,
+    receiverId: receiver.id,
+    receiverEmail: receiver.email,
+    participants: [me.id, receiver.id].sort(),
+  });
+
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
     if (snap.exists()) {
       const status = snap.data().status;
+      console.info('[friends] sendFriendRequest existing doc:', { fsId: id, status });
       if (status === 'accepted') throw new Error('Already friends');
       if (status === 'pending') throw new Error('Request already pending');
       tx.delete(ref); // declined → clear the stale row
@@ -271,6 +294,8 @@ export async function sendFriendRequest(me: User, receiver: User): Promise<Frien
       updatedAt: serverTimestamp(),
     });
   });
+
+  console.info('[friends] sendFriendRequest success:', { fsId: id });
   return {
     id,
     senderId: me.id,
@@ -376,13 +401,27 @@ export async function getFriendStatusWith(
 ): Promise<{ status: FriendRelationStatus; mutualCount: number; requestId: string | null }> {
   const db = getFirestoreInstance();
 
+  const fsId = friendshipPairKey(meId, otherId);
+  console.info('[friends] getFriendStatusWith start:', { meId, otherId, fsId });
+
   const [fsSnap, myBlk, theirBlk, myFs, theirFs] = await Promise.all([
-    getDoc(doc(db, 'friendships', friendshipPairKey(meId, otherId))),
+    getDoc(doc(db, 'friendships', fsId)),
     getDoc(doc(db, 'blocks', blockKey(meId, otherId))),
     getDoc(doc(db, 'blocks', blockKey(otherId, meId))),
     getDocs(query(collection(db, 'friendships'), where('participants', 'array-contains', meId))),
     getDocs(query(collection(db, 'friendships'), where('participants', 'array-contains', otherId))),
   ]);
+
+  console.info('[friends] getFriendStatusWith resolved:', {
+    meId,
+    otherId,
+    fsExists: fsSnap.exists(),
+    fsStatus: fsSnap.exists() ? fsSnap.data().status : null,
+    myBlkExists: myBlk.exists(),
+    theirBlkExists: theirBlk.exists(),
+    myFsCount: myFs.size,
+    theirFsCount: theirFs.size,
+  });
 
   let status: FriendRelationStatus = 'none';
   if (myBlk.exists()) status = 'blocked';
