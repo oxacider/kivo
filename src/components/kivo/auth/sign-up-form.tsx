@@ -38,7 +38,7 @@ function getFirebaseErrorMessage(err: any): string | null {
 
 export function SignUpForm() {
   const setView = useUIStore((s) => s.setView);
-  const { setUser, setToken } = useAuthStore();
+  const { setUser, setIsDemo } = useAuthStore();
   const [form, setForm] = useState({ email: '', password: '', displayName: '', username: '' });
   const [loading, setLoading] = useState(false);
   const [devVerificationCode, setDevVerificationCode] = useState<string | null>(null);
@@ -58,17 +58,15 @@ export function SignUpForm() {
       // 1) Create the Firebase Authentication account
       const credential = await createUserWithEmailAndPassword(auth, form.email, form.password);
       firebaseUser = credential.user;
-      const idToken = await credential.user.getIdToken();
 
-      // 2) Create the KIVO profile (Supabase Postgres) — email comes from the verified token
+      // 2) Create the KIVO profile (Supabase Postgres) — email comes from the
+      // verified token. api() attaches a fresh Firebase ID token automatically.
       const data = await api<{ user: User; verificationCode?: string }>('/auth/register', {
-        token: idToken,
         body: { displayName: form.displayName, username: form.username },
       });
 
-      // Store the Firebase ID token (the backend now accepts it)
       setUser(data.user);
-      setToken(idToken);
+      setIsDemo(false);
       if (data.verificationCode) setDevVerificationCode(data.verificationCode);
       setView('verify-email');
       toast.success('Account created! Please verify your email.');

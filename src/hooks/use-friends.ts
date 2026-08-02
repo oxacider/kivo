@@ -23,8 +23,7 @@ import { toast } from 'sonner';
  * components now read straight from the store.
  */
 export function useFriends() {
-  const { user, token } = useAuthStore();
-  const isDemo = token?.startsWith('demo-');
+  const { user, isDemo } = useAuthStore();
   const meId = user?.id ?? null;
 
   const friendsErrShown = useRef(false);

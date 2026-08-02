@@ -7,6 +7,7 @@ import { useFriendsStore } from '@/stores/friends-store';
 import { useUIStore } from '@/stores/ui-store';
 import { api } from '@/lib/api';
 import { connectSocket, disconnectSocket } from '@/lib/socket';
+import { auth } from '@/lib/firebase';
 import { getAllQueuedMessages } from '@/lib/offline-queue';
 import { subscribeConversations, fsConversationToConversation, markConversationRead, type FSConversationDoc } from '@/lib/chat-service';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -57,7 +58,7 @@ export function ConversationList() {
     presenceMap, clearTypingForConversation, clearUnread,
     setNetworkStatus, syncQueuedMessages,
   } = useChatStore();
-  const { user, token } = useAuthStore();
+  const { user, isDemo } = useAuthStore();
   const { setSearchOpen, setNotificationsOpen, setMobileSidebarOpen } = useUIStore();
   // Friends + pending requests now stream from the useFriends() Firestore hook.
   const { friends, pendingRequests } = useFriendsStore();
@@ -70,7 +71,6 @@ export function ConversationList() {
   /** Profiles fetched for participants not in the friends list. */
   const [extraProfiles, setExtraProfiles] = useState<Record<string, User>>({});
 
-  const isDemo = token?.startsWith('demo-');
   const greeting = useMemo(() => getGreeting(), []);
 
   /**
@@ -80,9 +80,7 @@ export function ConversationList() {
    * - Phase 3: live online/lastSeen is merged from the RTDB presence map.
    */
   useEffect(() => {
-    if (!token) return;
-    if (isDemo) return;
-    if (!user?.id) return;
+    if (isDemo || !user?.id) return;
     const meId = user.id;
 
     const unsub = subscribeConversations(
@@ -97,22 +95,22 @@ export function ConversationList() {
       }
     );
     return () => unsub();
-  }, [token, isDemo, user?.id]);
+  }, [isDemo, user?.id]);
 
   // Lazily fetch profiles for conversation participants that aren't in the friends list.
   useEffect(() => {
-    if (!token || isDemo || !user?.id || fsConvs.length === 0) return;
+    if (isDemo || !user?.id || fsConvs.length === 0) return;
     const meId = user.id;
     const known = new Set([...friends.map((f) => f.id), ...Object.keys(extraProfiles)]);
     for (const c of fsConvs) {
       const otherId = c.participants.find((p) => p !== meId);
       if (otherId && !known.has(otherId)) {
-        api<User>('/users/' + otherId, { token })
+        api<User>('/users/' + otherId)
           .then((u) => setExtraProfiles((prev) => (prev[otherId] ? prev : { ...prev, [otherId]: u })))
           .catch(() => {});
       }
     }
-  }, [fsConvs, friends, extraProfiles, token, isDemo, user?.id]);
+  }, [fsConvs, friends, extraProfiles, isDemo, user?.id]);
 
   // Derive the app Conversation objects (keeps the UI shape unchanged).
   // Phase 3: overlay live RTDB presence (online/lastSeen) onto otherUser.
@@ -137,10 +135,9 @@ export function ConversationList() {
   }, [fsConvs, friends, extraProfiles, presenceMap, user?.id, setConversations]);
 
   useEffect(() => {
-    if (!token) return;
-    if (isDemo) return;
-    const socket = connectSocket(token);
-    socketRef.current = socket;
+    if (isDemo || !user?.id) return;
+    let cancelled = false;
+    let socket: any = null;
 
     // Network awareness + auto-sync on reconnect
     // (typing + presence moved to RTDB in Phase 3; socket kept only for
@@ -152,46 +149,59 @@ export function ConversationList() {
     const handleConnect = () => { setNetworkStatus('online'); syncQueuedMessages(); };
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
-    socket.on('reconnect', handleReconnect);
-    socket.on('reconnect_attempt', handleReconnect);
-    socket.on('reconnect_failed', handleReconnectFail);
-    socket.on('connect', handleConnect);
 
-    // Restore queued messages from IndexedDB into store on mount
-    (async () => {
-      try {
-        const queued = await getAllQueuedMessages();
-        for (const q of queued) {
-          const msg: import('@/types').Message = {
-            id: q.tempId,
-            conversationId: q.conversationId,
-            senderId: q.senderId,
-            content: q.content,
-            type: q.type as any,
-            status: 'queued',
-            replyToId: q.replyToId,
-            edited: false,
-            deleted: false,
-            createdAt: q.createdAt,
-            updatedAt: q.updatedAt,
-            sender: q.sender,
-            replyTo: q.replyTo ?? null,
-            attachments: q.attachments,
-          };
-          useChatStore.getState().addMessage(msg);
-        }
-      } catch { /* IndexedDB unavailable */ }
-    })();
+    // Obtain a FRESH Firebase ID token at connect time — never cached.
+    auth.currentUser
+      ?.getIdToken()
+      .then((freshToken) => {
+        if (cancelled || !freshToken) return;
+        socket = connectSocket(freshToken);
+        socketRef.current = socket;
+        socket.on('reconnect', handleReconnect);
+        socket.on('reconnect_attempt', handleReconnect);
+        socket.on('reconnect_failed', handleReconnectFail);
+        socket.on('connect', handleConnect);
+
+        // Restore queued messages from IndexedDB into store on mount
+        (async () => {
+          try {
+            const queued = await getAllQueuedMessages();
+            for (const q of queued) {
+              const msg: import('@/types').Message = {
+                id: q.tempId,
+                conversationId: q.conversationId,
+                senderId: q.senderId,
+                content: q.content,
+                type: q.type as any,
+                status: 'queued',
+                replyToId: q.replyToId,
+                edited: false,
+                deleted: false,
+                createdAt: q.createdAt,
+                updatedAt: q.updatedAt,
+                sender: q.sender,
+                replyTo: q.replyTo ?? null,
+                attachments: q.attachments,
+              };
+              useChatStore.getState().addMessage(msg);
+            }
+          } catch { /* IndexedDB unavailable */ }
+        })();
+      })
+      .catch(() => { /* token fetch failed — socket stays disconnected */ });
 
     return () => {
-      socket.off('reconnect', handleReconnect);
-      socket.off('reconnect_attempt', handleReconnect);
-      socket.off('reconnect_failed', handleReconnectFail);
-      socket.off('connect', handleConnect);
+      cancelled = true;
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      if (socket) {
+        socket.off('reconnect', handleReconnect);
+        socket.off('reconnect_attempt', handleReconnect);
+        socket.off('reconnect_failed', handleReconnectFail);
+        socket.off('connect', handleConnect);
+      }
     };
-  }, [isDemo, token, setNetworkStatus, syncQueuedMessages]);
+  }, [isDemo, user?.id, setNetworkStatus, syncQueuedMessages]);
 
   const selectConversation = useCallback((id: string) => {
     setActiveConversationId(id);

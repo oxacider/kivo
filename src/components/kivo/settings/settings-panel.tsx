@@ -24,7 +24,7 @@ import type { User } from '@/types';
 function getInitials(name: string) { return name.slice(0, 2).toUpperCase(); }
 
 export function SettingsPanel() {
-  const { user, token, setUser, logout } = useAuthStore();
+  const { user, isDemo, setUser, logout } = useAuthStore();
   const { setView, setSettingsOpen } = useUIStore();
   const { theme, setTheme } = useTheme();
   const { blockedUsers, removeBlockedUser } = useFriendsStore();
@@ -41,19 +41,19 @@ export function SettingsPanel() {
   // Debounced notification settings persistence
   const notifTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!token || token.startsWith('demo-')) return;
+    if (isDemo) return;
     if (notifTimer.current) clearTimeout(notifTimer.current);
     notifTimer.current = setTimeout(() => {
       // Persist locally for now; could extend to a server endpoint
     }, 500);
     return () => { if (notifTimer.current) clearTimeout(notifTimer.current); };
-  }, [notifSettings, token]);
+  }, [notifSettings, isDemo]);
 
   const saveProfile = async () => {
     if (!user) return;
     setLoading(true);
     try {
-      const updated = await api<User>('/users/' + user.id, { token, method: 'PUT', body: form });
+      const updated = await api<User>('/users/' + user.id, { method: 'PUT', body: form });
       setUser(updated);
       setSection('main');
       toast.success('Profile updated');
@@ -64,7 +64,7 @@ export function SettingsPanel() {
   const handleLogout = () => {
     disconnectSocket();
     // Phase 3: flip presence offline explicitly (RTDB onDisconnect is the backup).
-    if (user?.id && !token?.startsWith('demo-')) disconnectPresence(user.id);
+    if (user?.id && !isDemo) disconnectPresence(user.id);
     logout();
     setSettingsOpen(false);
     setView('welcome');
@@ -198,7 +198,7 @@ export function SettingsPanel() {
               </div>
               <Switch checked={privacySettings.showOnline} onCheckedChange={async (v) => {
                 setPrivacySettings((s) => ({ ...s, showOnline: v }));
-                if (token) { api('/users/privacy', { token, method: 'PUT', body: { showOnline: v } }).catch(() => {}); }
+                if (!isDemo) { api('/users/privacy', { method: 'PUT', body: { showOnline: v } }).catch(() => {}); }
               }} />
             </div>
             <div className="flex items-center justify-between rounded-xl bg-surface-1 p-4">
@@ -208,7 +208,7 @@ export function SettingsPanel() {
               </div>
               <Switch checked={privacySettings.showLastSeen} onCheckedChange={async (v) => {
                 setPrivacySettings((s) => ({ ...s, showLastSeen: v }));
-                if (token) { api('/users/privacy', { token, method: 'PUT', body: { showLastSeen: v } }).catch(() => {}); }
+                if (!isDemo) { api('/users/privacy', { method: 'PUT', body: { showLastSeen: v } }).catch(() => {}); }
               }} />
             </div>
             <div className="flex items-center justify-between rounded-xl bg-surface-1 p-4">
@@ -218,7 +218,7 @@ export function SettingsPanel() {
               </div>
               <Switch checked={privacySettings.showReadReceipts} onCheckedChange={async (v) => {
                 setPrivacySettings((s) => ({ ...s, showReadReceipts: v }));
-                if (token) { api('/users/privacy', { token, method: 'PUT', body: { showReadReceipts: v } }).catch(() => {}); }
+                if (!isDemo) { api('/users/privacy', { method: 'PUT', body: { showReadReceipts: v } }).catch(() => {}); }
               }} />
             </div>
           </div>

@@ -18,6 +18,8 @@ import { toast } from 'sonner';
 import { saveQueuedMessage } from '@/lib/offline-queue';
 import { setTypingState, subscribeTyping } from '@/lib/presence';
 import { blockUser } from '@/lib/friends-service';
+import { auth } from '@/lib/firebase';
+import { signOutAndRedirect } from '@/lib/api';
 import {
   sendMessage as firestoreSendMessage,
   editMessage as firestoreEditMessage,
@@ -315,7 +317,7 @@ function UploadProgressBar({ progress }: { progress: number }) {
 
 export function ConversationView() {
   const { activeConversationId, conversations, messages, prependMessages, addMessage, updateMessage, typingUsers, setActiveConversationId, updateConversation, addReaction, removeReaction, setMessageStatus, setTyping, clearTypingForConversation, hasMoreMessages, isLoadingMoreMessages, setLoadingMoreMessages, setHasMoreMessages, networkStatus, isSyncing } = useChatStore();
-  const { user, token } = useAuthStore();
+  const { user, isDemo } = useAuthStore();
   const [input, setInput] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
   const [replyTo, setReplyTo] = useState<Message | null>(null);
@@ -374,7 +376,7 @@ export function ConversationView() {
       reachedStartRef.current = false;
       loadMoreTriggeredRef.current = false;
     }
-    if (!activeConversationId || !token || !hasMoreMessages || isLoadingMoreMessages) return;
+    if (!activeConversationId || !user?.id || !hasMoreMessages || isLoadingMoreMessages) return;
     const convId = activeConversationId;
     const firstMsg = useChatStore
       .getState()
@@ -403,7 +405,7 @@ export function ConversationView() {
       }
     })();
     return () => { cancelled = true; };
-  }, [loadMoreTick, activeConversationId, token]);
+  }, [loadMoreTick, activeConversationId, user?.id]);
 
   // Track whether this is the initial load for current conversation (for instant scroll)
   const initialLoadDoneRef = useRef(false);
@@ -420,9 +422,7 @@ export function ConversationView() {
    * reactions and read receipts all flow through the message snapshot.
    */
   useEffect(() => {
-    if (!activeConversationId || !token) return;
-    const isDemo = token.startsWith('demo-');
-    if (isDemo) return;
+    if (!activeConversationId || !user?.id || isDemo) return;
     const convId = activeConversationId;
     let cancelled = false;
     // Don't flash the previous conversation's messages while the new
@@ -486,16 +486,16 @@ export function ConversationView() {
     });
 
     return () => { cancelled = true; unsub(); };
-  }, [activeConversationId, token, user?.id, setHasMoreMessages]);
+  }, [activeConversationId, user?.id, isDemo, setHasMoreMessages]);
 
   // Mark the conversation as read when a new message from the other user
   // arrives while it's open (avoids a write on every snapshot).
   useEffect(() => {
-    if (!activeConversationId || !user?.id || token?.startsWith('demo-')) return;
+    if (!activeConversationId || !user?.id || isDemo) return;
     const last = messages[messages.length - 1];
     if (!last || last.senderId === user.id) return;
     markConversationRead(activeConversationId, user.id).catch(() => {});
-  }, [activeConversationId, user?.id, token, messages]);
+  }, [activeConversationId, user?.id, isDemo, messages]);
 
   /**
    * Phase 3: RTDB typing subscription — replaces the socket 'user:typing'
@@ -503,7 +503,7 @@ export function ConversationView() {
    * conversation and mirrors entries into the chat store.
    */
   useEffect(() => {
-    if (!activeConversationId || !user?.id || token?.startsWith('demo-')) return;
+    if (!activeConversationId || !user?.id || isDemo) return;
     const convId = activeConversationId;
     const unsub = subscribeTyping(convId, (typing) => {
       for (const [uid, data] of Object.entries(typing)) {
@@ -514,7 +514,7 @@ export function ConversationView() {
       unsub();
       clearTypingForConversation(convId);
     };
-  }, [activeConversationId, user?.id, token, setTyping]);
+  }, [activeConversationId, user?.id, isDemo, setTyping]);
 
   // Clean up typing timeout on unmount
   useEffect(() => {
@@ -569,7 +569,7 @@ export function ConversationView() {
     if (inputRef.current) inputRef.current.style.height = 'auto';
 
     // Phase 3: stop typing via RTDB (was socket 'typing:stop')
-    if (user?.id && !token?.startsWith('demo-')) setTypingState(activeConversationId, user.id, false).catch(() => {});
+    if (user?.id && !isDemo) setTypingState(activeConversationId, user.id, false).catch(() => {});
     if (typingTimeout.current) clearTimeout(typingTimeout.current);
 
     if (isOnline) {
@@ -641,7 +641,7 @@ export function ConversationView() {
 
   // --- Send image message with upload ---
   const sendImageMessage = useCallback(() => {
-    if (!pendingImage || !activeConversationId || !token || !user || isUploading) return;
+    if (!pendingImage || !activeConversationId || !user || isDemo || isUploading) return;
     setIsUploading(true);
     setUploadProgress(0);
 
@@ -687,77 +687,104 @@ export function ConversationView() {
     setShowEmoji(false);
     if (inputRef.current) inputRef.current.style.height = 'auto';
 
-    // Upload using XMLHttpRequest for progress tracking
+    // Upload using XMLHttpRequest for progress tracking. The Firebase ID
+    // token is fetched FRESH at send time (never cached) and the request is
+    // retried ONCE with a forced refresh on 401, matching authFetch.
     const formData = new FormData();
     formData.append('file', pendingImage.file);
     formData.append('width', String(pendingImage.width));
     formData.append('height', String(pendingImage.height));
 
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/media/upload');
-    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    const uploadWithToken = (token: string) =>
+      new Promise<{ status: number; text: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/media/upload');
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) setUploadProgress(Math.round((e.loaded / e.total) * 100));
+        };
+        xhr.onload = () => resolve({ status: xhr.status, text: xhr.responseText });
+        xhr.onerror = () => reject(new Error('Network error during upload'));
+        xhr.send(formData);
+      });
 
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) {
-        setUploadProgress(Math.round((e.loaded / e.total) * 100));
-      }
-    };
+    (async () => {
+      try {
+        let token = await auth.currentUser?.getIdToken();
+        if (!token) {
+          setMessageStatus(tempId, 'failed');
+          toast.error('Not authenticated');
+          return;
+        }
+        let result = await uploadWithToken(token);
 
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const res = JSON.parse(xhr.responseText);
-          if (res.success && res.data?.id) {
-            const realAttachment: MediaAttachment = {
-              id: res.data.id,
-              type: 'image',
-              url: res.data.url || pendingImage.dataUrl,
-              name: pendingImage.name,
-              size: pendingImage.size,
-              mimeType: pendingImage.mimeType,
-              width: pendingImage.width,
-              height: pendingImage.height,
-            };
-            // Update optimistic message with the real attachment
-            updateMessage(tempId, { attachments: [realAttachment] });
-            // Phase 2: send via Firestore with the uploaded attachment
-            firestoreSendMessage({
-              conversationId: activeConversationId,
-              sender: user,
-              recipientId,
-              content: caption,
-              type: 'image',
-              replyToId: optimisticMsg.replyToId,
-              attachments: [realAttachment],
-              tempId,
-            })
-              .then(() => updateMessage(tempId, { status: 'sent' }))
-              .catch(() => setMessageStatus(tempId, 'failed'));
-          } else {
+        // 401 → force-refresh token and retry ONCE.
+        if (result.status === 401) {
+          token = await auth.currentUser?.getIdToken(true);
+          if (!token) {
             setMessageStatus(tempId, 'failed');
-            toast.error(res.error || 'Upload failed');
+            toast.error('Session expired. Please sign in again.');
+            return;
           }
-        } catch {
+          result = await uploadWithToken(token);
+          if (result.status === 401) {
+            // Retry failed — sign out + redirect to login.
+            await signOutAndRedirect();
+            setMessageStatus(tempId, 'failed');
+            return;
+          }
+        }
+
+        if (result.status >= 200 && result.status < 300) {
+          try {
+            const res = JSON.parse(result.text);
+            if (res.success && res.data?.id) {
+              const realAttachment: MediaAttachment = {
+                id: res.data.id,
+                type: 'image',
+                url: res.data.url || pendingImage.dataUrl,
+                name: pendingImage.name,
+                size: pendingImage.size,
+                mimeType: pendingImage.mimeType,
+                width: pendingImage.width,
+                height: pendingImage.height,
+              };
+              // Update optimistic message with the real attachment
+              updateMessage(tempId, { attachments: [realAttachment] });
+              // Phase 2: send via Firestore with the uploaded attachment
+              firestoreSendMessage({
+                conversationId: activeConversationId,
+                sender: user,
+                recipientId,
+                content: caption,
+                type: 'image',
+                replyToId: optimisticMsg.replyToId,
+                attachments: [realAttachment],
+                tempId,
+              })
+                .then(() => updateMessage(tempId, { status: 'sent' }))
+                .catch(() => setMessageStatus(tempId, 'failed'));
+            } else {
+              setMessageStatus(tempId, 'failed');
+              toast.error(res.error || 'Upload failed');
+            }
+          } catch {
+            setMessageStatus(tempId, 'failed');
+            toast.error('Upload failed');
+          }
+        } else {
           setMessageStatus(tempId, 'failed');
           toast.error('Upload failed');
         }
-      } else {
+      } catch (err: any) {
         setMessageStatus(tempId, 'failed');
-        toast.error('Upload failed');
+        toast.error(err?.message || 'Upload failed');
+      } finally {
+        setIsUploading(false);
+        setUploadProgress(0);
       }
-      setIsUploading(false);
-      setUploadProgress(0);
-    };
-
-    xhr.onerror = () => {
-      setMessageStatus(tempId, 'failed');
-      toast.error('Network error during upload');
-      setIsUploading(false);
-      setUploadProgress(0);
-    };
-
-    xhr.send(formData);
-  }, [pendingImage, activeConversationId, token, user, input, replyTo, isUploading, addMessage, updateMessage, setMessageStatus]);
+    })();
+  }, [pendingImage, activeConversationId, user, isDemo, input, replyTo, isUploading, addMessage, updateMessage, setMessageStatus]);
 
   const handleSend = useCallback(() => {
     if (pendingImage) {
@@ -799,7 +826,7 @@ export function ConversationView() {
     setInput(e.target.value);
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
-    if (activeConversationId && user?.id && !token?.startsWith('demo-')) {
+    if (activeConversationId && user?.id && !isDemo) {
       // Phase 3: typing indicator via RTDB (was socket 'typing:start'/'typing:stop')
       setTypingState(activeConversationId, user.id, true, user).catch(() => {});
       if (typingTimeout.current) clearTimeout(typingTimeout.current);
@@ -828,7 +855,7 @@ export function ConversationView() {
   };
 
   const deleteMessage = async (msgId: string) => {
-    if (token?.startsWith('demo-')) { toast.info('Demo mode'); return; }
+    if (isDemo) { toast.info('Demo mode'); return; }
     if (!activeConversationId) return;
     try {
       await firestoreDeleteMessage(activeConversationId, msgId);
@@ -845,7 +872,7 @@ export function ConversationView() {
 
   const handleBlockUser = async () => {
     if (!otherUser || !user) return;
-    if (token?.startsWith('demo-')) { toast.info('Demo mode'); return; }
+    if (isDemo) { toast.info('Demo mode'); return; }
     try {
       await blockUser(user.id, { id: otherUser.id, displayName: otherUser.displayName, username: otherUser.username, avatar: otherUser.avatar });
       toast.success(`${otherUser.displayName} has been blocked`);

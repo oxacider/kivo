@@ -5,12 +5,25 @@ import { auth } from '@/lib/firebase';
 import { enableNotifications, disableNotifications } from '@/lib/notifications';
 import type { User } from '@/types';
 
+/**
+ * Auth store.
+ *
+ * The Firebase ID token is NEVER stored here (or in localStorage, React
+ * state, or any cache). The token is a short-lived credential whose only
+ * source of truth is Firebase Auth (`auth.currentUser.getIdToken()`), and it
+ * is fetched fresh by the centralized `authFetch` helper in `@/lib/api` on
+ * every authenticated request.
+ *
+ * This store only tracks:
+ *  - `user`   → the hydrated KIVO profile (identity, not a credential)
+ *  - `isDemo` → whether the session is the local demo account
+ */
 interface AuthState {
   user: User | null;
-  token: string | null;
+  isDemo: boolean;
   isLoading: boolean;
   setUser: (user: User) => void;
-  setToken: (token: string) => void;
+  setIsDemo: (isDemo: boolean) => void;
   updateUser: (data: Partial<User>) => void;
   setLoading: (loading: boolean) => void;
   logout: () => void;
@@ -20,11 +33,11 @@ export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
       user: null,
-      token: null,
+      isDemo: false,
       isLoading: false,
 
       setUser: (user) => set({ user }),
-      setToken: (token) => set({ token }),
+      setIsDemo: (isDemo) => set({ isDemo }),
       updateUser: (data) =>
         set((state) => ({
           user: state.user ? { ...state.user, ...data } : null,
@@ -32,17 +45,26 @@ export const useAuthStore = create<AuthState>()(
       setLoading: (isLoading) => set({ isLoading }),
 
       logout: () => {
-        const { token } = get();
-        if (token && !token.startsWith('demo-')) {
-          // End the Firebase session (replaces the old server-side JWT invalidation)
+        const { isDemo } = get();
+        if (!isDemo) {
+          // End the Firebase session (Firebase Auth is the source of truth).
           signOut(auth).catch(() => {});
           disableNotifications().catch(() => {});
         }
-        set({ user: null, token: null });
+        set({ user: null, isDemo: false });
       },
     }),
     {
       name: 'kivo-auth',
+      // Only persist the user profile + demo flag. NEVER the ID token.
+      partialize: (state) => ({ user: state.user, isDemo: state.isDemo }),
+      // v2: purge any legacy cached `token` / `setToken` remnants from older
+      // persists so no Firebase ID token ever survives in localStorage.
+      version: 2,
+      migrate: (persisted: any) => {
+        const { user = null, isDemo = false } = persisted ?? {};
+        return { user, isDemo };
+      },
     }
   )
 );
@@ -57,8 +79,8 @@ export const useAuthStore = create<AuthState>()(
  * session restore / page refresh.
  */
 export function triggerNotifications() {
-  const { token } = useAuthStore.getState();
-  // Skip for demo tokens (no real backend to send pushes)
-  if (!token || token.startsWith('demo-')) return;
+  const { isDemo } = useAuthStore.getState();
+  // Skip for demo accounts (no real backend to send pushes)
+  if (isDemo) return;
   enableNotifications().catch(() => {});
 }

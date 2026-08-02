@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
-import { api } from '@/lib/api';
+import { api, apiUpload } from '@/lib/api';
 import type { User } from '@/types';
 import { useTheme } from 'next-themes';
 import { useUIStore } from '@/stores/ui-store';
@@ -58,7 +58,7 @@ function formatLastSeen(date: string): string {
 }
 
 export function ProfilePage() {
-  const { user, token, logout } = useAuthStore();
+  const { user, isDemo, logout } = useAuthStore();
   const { friends } = useFriendsStore();
   const { setSettingsOpen } = useUIStore();
   const { theme, setTheme } = useTheme();
@@ -66,8 +66,6 @@ export function ProfilePage() {
   const [isEditing, setIsEditing] = useState(false);
   const [editBio, setEditBio] = useState(user?.bio ?? '');
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const isDemo = token?.startsWith('demo-');
 
   const joinDate = useMemo(() => {
     if (!user?.createdAt) return 'Unknown';
@@ -81,7 +79,7 @@ export function ProfilePage() {
   const handleSaveBio = async () => {
     if (!user || isDemo) return;
     try {
-      const updated = await api<User>('/users/' + user.id, { token, method: 'PUT', body: { bio: editBio } });
+      const updated = await api<User>('/users/' + user.id, { method: 'PUT', body: { bio: editBio } });
       useAuthStore.getState().setUser(updated);
       setIsEditing(false);
       toast.success('Bio updated');
@@ -113,14 +111,8 @@ export function ProfilePage() {
     try {
       const formData = new FormData();
       formData.append('avatar', file);
-      const res = await fetch('/api/users/avatar', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
-      });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error);
-      useAuthStore.getState().updateUser({ avatar: json.data.avatar });
+      const data = await apiUpload<{ avatar: string }>('/users/avatar', { body: formData });
+      useAuthStore.getState().updateUser({ avatar: data.avatar });
       toast.success('Avatar updated');
     } catch (err: any) {
       toast.error(err.message || 'Failed to upload avatar');

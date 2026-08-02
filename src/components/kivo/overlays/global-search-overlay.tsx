@@ -43,7 +43,7 @@ export function GlobalSearchOverlay() {
   const { searchOpen, setSearchOpen } = useUIStore();
   const { conversations } = useChatStore();
   const { friends } = useFriendsStore();
-  const { token } = useAuthStore();
+  const { isDemo } = useAuthStore();
 
   const inputRef = useRef<HTMLInputElement>(null);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -52,8 +52,6 @@ export function GlobalSearchOverlay() {
   const [category, setCategory] = useState<SearchCategory>('all');
   const [apiResults, setApiResults] = useState<UserType[]>([]);
   const [searching, setSearching] = useState(false);
-
-  const isDemo = token?.startsWith('demo-');
 
   const filteredConversations = (() => {
     if (!query.trim()) return conversations.slice(0, 5);
@@ -88,7 +86,7 @@ export function GlobalSearchOverlay() {
     searchTimeoutRef.current = setTimeout(async () => {
       try {
         setSearching(true);
-        const results = await api<UserType[]>(`/users/search?q=${encodeURIComponent(query)}`, { token });
+        const results = await api<UserType[]>(`/users/search?q=${encodeURIComponent(query)}`);
         setApiResults(results);
       } catch {
         setApiResults([]);

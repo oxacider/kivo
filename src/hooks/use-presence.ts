@@ -19,11 +19,10 @@ import { useChatStore } from '@/stores/chat-store';
  * On unmount / logout the user is flipped offline.
  */
 export function usePresence() {
-  const { user, token } = useAuthStore();
+  const { user, isDemo } = useAuthStore();
   const { friends } = useFriendsStore();
   const { conversations } = useChatStore();
 
-  const isDemo = token?.startsWith('demo-');
   const meId = user?.id ?? null;
 
   // Go online once when a real session is present, and re-establish presence

@@ -66,8 +66,7 @@ function handleForegroundMessage(payload: MessagePayload) {
 
 export function FirebaseProvider({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((s) => s.user);
-  const token = useAuthStore((s) => s.token);
-  const isLoggedIn = !!user && !!token;
+  const isLoggedIn = !!user;
   const listenerRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {

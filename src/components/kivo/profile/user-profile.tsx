@@ -21,7 +21,7 @@ interface Props {
 }
 
 export function UserProfile({ userId }: Props) {
-  const { token, user: me } = useAuthStore();
+  const { isDemo, user: me } = useAuthStore();
   const { setView } = useUIStore();
   const [profile, setProfile] = useState<User | null>(null);
   const [isFriend, setIsFriend] = useState(false);
@@ -29,10 +29,10 @@ export function UserProfile({ userId }: Props) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!token) return;
+    if (!me || isDemo) return;
     (async () => {
       try {
-        const u = await api<User>('/users/' + userId, { token });
+        const u = await api<User>('/users/' + userId);
         setProfile(u);
 
         // Phase 4: friendship + block status read straight from Firestore.
@@ -46,17 +46,17 @@ export function UserProfile({ userId }: Props) {
       } catch (err: any) { toast.error(err.message); }
       setLoading(false);
     })();
-  }, [token, userId]);
+  }, [me, isDemo, userId]);
 
   // Phase 3: live online/lastSeen via RTDB presence.
   useEffect(() => {
-    if (!token || token.startsWith('demo-')) return;
+    if (isDemo) return;
     const unsub = subscribePresence(userId, (presence) => {
       if (!presence) return;
       setProfile((prev) => (prev ? { ...prev, online: presence.online, lastSeen: presence.lastSeen } : prev));
     });
     return () => unsub();
-  }, [token, userId]);
+  }, [isDemo, userId]);
 
   const startChat = async () => {
     if (!me) return;

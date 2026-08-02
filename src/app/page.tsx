@@ -26,7 +26,7 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/
 import { Bell } from 'lucide-react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
-import { api } from '@/lib/api';
+import { authFetch } from '@/lib/api';
 import type { User } from '@/types';
 
 type ViewConfig = {
@@ -63,57 +63,41 @@ function routeAfterRestore(user: User) {
 
 export default function Home() {
   const { currentView, splashDone, setSplashDone, setView } = useUIStore();
-  const { user, token } = useAuthStore();
+  const { user, isDemo } = useAuthStore();
   const { setActiveConversationId } = useChatStore();
 
   // Fix hydration mismatch: splashDone persisted but currentView reset to 'splash'
   useEffect(() => {
     if (splashDone && currentView === 'splash') {
-      setView(user && token ? 'chat' : 'welcome');
+      setView(user ? 'chat' : 'welcome');
     }
-  }, [splashDone, currentView, user, token, setView]);
+  }, [splashDone, currentView, user, setView]);
 
   // Handle notification click: ?chat=conversationId from SW click handler
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
     const chatId = params.get('chat');
-    if (chatId && user && token) {
+    if (chatId && user) {
       setActiveConversationId(chatId);
       // Clean URL without reload
       window.history.replaceState({}, '', '/');
     }
-  }, [user, token, setActiveConversationId]);
+  }, [user, setActiveConversationId]);
 
   /**
    * Session restore — Firebase Auth is the single source of truth.
    *
    * onAuthStateChanged() drives the auth store: when a Firebase session exists
-   * we hydrate the complete profile from the backend (/auth/me); otherwise we
-   * fall back to the legacy JWT session for backward compatibility. Demo and
-   * signed-out states are left to handleSplashDone.
+   * we hydrate the complete profile from the backend via /auth/me (the
+   * centralized api() helper attaches a fresh ID token automatically). When
+   * there is no Firebase session the store is cleared and the user lands on
+   * welcome. The legacy JWT session path has been removed — tokens are never
+   * cached; Firebase Auth is the only source of truth.
    */
   useEffect(() => {
     if (typeof window === 'undefined') return;
     let cancelled = false;
-
-    /** Backward-compatible restore for legacy JWT sessions (no Firebase session). */
-    const restoreLegacySession = async () => {
-      const { token: storedToken } = useAuthStore.getState();
-      if (!storedToken || storedToken.startsWith('demo-')) return;
-      try {
-        const me = await api<User>('/auth/me', { token: storedToken });
-        if (cancelled) return;
-        useAuthStore.setState({ user: me, token: storedToken });
-        routeAfterRestore(me);
-      } catch {
-        if (cancelled) return;
-        // Stale legacy token → clear the persisted session.
-        useAuthStore.getState().logout();
-        const ui = useUIStore.getState();
-        if (ui.splashDone) ui.setView('welcome');
-      }
-    };
 
     let unsubscribe: (() => void) | undefined;
     try {
@@ -121,74 +105,73 @@ export default function Home() {
         if (cancelled) return;
 
         if (firebaseUser) {
-          // Primary path: Firebase session → fresh ID token + hydrated DB profile.
-          firebaseUser
-            .getIdToken()
-            .then(async (idToken) => {
+          // Primary path: Firebase session → hydrated DB profile.
+          // authFetch() internally calls auth.currentUser.getIdToken() for a
+          // fresh token on every request, and retries once on 401 with a
+          // forced refresh — so no token is ever cached here. autoSignOut:false
+          // keeps a 401 from /auth/me from killing the session, because a 401
+          // here usually means "no DB record yet", not an expired token.
+          authFetch('/api/auth/me', {}, { autoSignOut: false })
+            .then(async (res) => {
               if (cancelled) return;
-              let hydrated: User;
-              try {
-                hydrated = await api<User>('/auth/me', { token: idToken });
-              } catch {
-                // No DB record yet — fall back to a Firebase-derived profile,
-                // but never clobber an existing hydrated DB user (e.g. the
-                // signup /auth/register insert may still be in flight).
-                const existing = useAuthStore.getState().user;
-                if (
-                  existing?.email &&
-                  existing.email.toLowerCase() === (firebaseUser.email || '').toLowerCase()
-                ) {
-                  useAuthStore.setState({ token: idToken });
-                  routeAfterRestore(existing);
-                  return;
-                }
-                hydrated = {
-                  id: firebaseUser.uid,
-                  email: firebaseUser.email || '',
-                  displayName: firebaseUser.displayName || '',
-                  username: (firebaseUser.email || '').split('@')[0] || firebaseUser.uid,
-                  avatar: '',
-                  bio: '',
-                  status: '',
-                  online: true,
-                  lastSeen: new Date().toISOString(),
-                  theme: 'dark',
-                  emailVerified: firebaseUser.emailVerified,
-                  showOnline: true,
-                  showLastSeen: true,
-                  showReadReceipts: true,
-                  createdAt: firebaseUser.metadata.creationTime || new Date().toISOString(),
-                  updatedAt: firebaseUser.metadata.lastSignInTime || new Date().toISOString(),
-                };
+              const json = await res.json().catch(() => ({ success: false }));
+              if (res.ok && json.success) {
+                useAuthStore.setState({ user: json.data as User, isDemo: false });
+                routeAfterRestore(json.data as User);
+                return;
               }
-              if (cancelled) return;
-              useAuthStore.setState({ user: hydrated, token: idToken });
+              // No DB record yet — fall back to a Firebase-derived profile,
+              // but never clobber an existing hydrated DB user (e.g. the
+              // signup /auth/register insert may still be in flight).
+              const existing = useAuthStore.getState().user;
+              if (
+                existing?.email &&
+                existing.email.toLowerCase() === (firebaseUser.email || '').toLowerCase()
+              ) {
+                useAuthStore.setState({ isDemo: false });
+                routeAfterRestore(existing);
+                return;
+              }
+              const hydrated: User = {
+                id: firebaseUser.uid,
+                email: firebaseUser.email || '',
+                displayName: firebaseUser.displayName || '',
+                username: (firebaseUser.email || '').split('@')[0] || firebaseUser.uid,
+                avatar: '',
+                bio: '',
+                status: '',
+                online: true,
+                lastSeen: new Date().toISOString(),
+                theme: 'dark',
+                emailVerified: firebaseUser.emailVerified,
+                showOnline: true,
+                showLastSeen: true,
+                showReadReceipts: true,
+                createdAt: firebaseUser.metadata.creationTime || new Date().toISOString(),
+                updatedAt: firebaseUser.metadata.lastSignInTime || new Date().toISOString(),
+              };
+              useAuthStore.setState({ user: hydrated, isDemo: false });
               routeAfterRestore(hydrated);
             })
             .catch(() => {
-              // ID token refresh failed (e.g. network) — keep existing state and
+              // Token fetch failed (e.g. network) — keep existing state and
               // let a later auth event / reload retry. Never sign the user out here.
             });
           return;
         }
 
-        // No Firebase session:
-        const { token: storedToken } = useAuthStore.getState();
-        if (storedToken && !storedToken.startsWith('demo-')) {
-          // Legacy JWT session → restore it (backward compatibility).
-          void restoreLegacySession();
-        } else if (!storedToken) {
-          // Signed out after the splash (e.g. logout from chat) — land on welcome.
-          const ui = useUIStore.getState();
-          if (ui.splashDone && ui.currentView !== 'welcome' && ui.currentView !== 'splash') {
-            ui.setView('welcome');
-          }
+        // No Firebase session → signed out. Clear the store (demo sessions are
+        // tracked by isDemo and left untouched) and land on welcome.
+        const { isDemo: demo } = useAuthStore.getState();
+        if (demo) return;
+        useAuthStore.setState({ user: null, isDemo: false });
+        const ui = useUIStore.getState();
+        if (ui.splashDone && ui.currentView !== 'welcome' && ui.currentView !== 'splash') {
+          ui.setView('welcome');
         }
-        // Demo sessions (storedToken starts with 'demo-') are left untouched.
       });
     } catch {
-      // Firebase misconfigured — fall back to the legacy session restore.
-      void restoreLegacySession();
+      // Firebase misconfigured — nothing to restore.
     }
 
     return () => {
@@ -199,9 +182,9 @@ export default function Home() {
 
   const handleSplashDone = useCallback(() => {
     setSplashDone(true);
-    if (user && token) {
-      // Gate: unverified users go to verify-email
-      if (!token.startsWith('demo-') && !user.emailVerified) {
+    if (user) {
+      // Gate: unverified users go to verify-email (real sessions only)
+      if (!isDemo && !user.emailVerified) {
         setView('verify-email');
       } else {
         setView('chat');
@@ -209,7 +192,7 @@ export default function Home() {
     } else {
       setView('welcome');
     }
-  }, [user, token, setSplashDone, setView]);
+  }, [user, isDemo, setSplashDone, setView]);
 
   const config = viewConfig[currentView] || viewConfig.welcome;
 

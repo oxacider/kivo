@@ -44,7 +44,7 @@ const fadeUp = {
 };
 
 export function FriendsPage() {
-  const { user, token } = useAuthStore();
+  const { user, isDemo } = useAuthStore();
   const {
     friends, pendingRequests, sentRequests, friendStatuses, mutualCounts,
     removeFriend, removeRequest, removeSentRequest, addSentRequest, setFriendStatus, setMutualCount,
@@ -56,8 +56,6 @@ export function FriendsPage() {
   const [searchResults, setSearchResults] = useState<UserType[]>([]);
   const [searching, setSearching] = useState(false);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const isDemo = token?.startsWith('demo-');
 
   const onlineFriends = useMemo(() => friends.filter((f) => f.online), [friends]);
 
@@ -78,12 +76,12 @@ export function FriendsPage() {
     searchTimeoutRef.current = setTimeout(async () => {
       try {
         setSearching(true);
-        const results = await api<UserType[]>('/users/search?q=' + encodeURIComponent(searchQuery), { token });
+        const results = await api<UserType[]>('/users/search?q=' + encodeURIComponent(searchQuery));
         setSearchResults(results);
       } catch { setSearchResults([]); } finally { setSearching(false); }
     }, 400);
     return () => { if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current); };
-  }, [activeTab, searchQuery, isDemo, token]);
+  }, [activeTab, searchQuery, isDemo]);
 
   const getFriendStatus = (userId: string): FriendRelationStatus => friendStatuses[userId] || 'none';
 

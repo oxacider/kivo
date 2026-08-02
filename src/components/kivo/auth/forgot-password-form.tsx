@@ -79,8 +79,8 @@ export function ForgotPasswordForm() {
         return;
       }
 
-      // Legacy fallback: 6-digit reset code stored in the DB.
-      const data: any = await api('/auth/forgot-password', { body: { email } });
+      // Legacy fallback: 6-digit reset code stored in the DB (public endpoint).
+      const data: any = await api('/auth/forgot-password', { body: { email }, auth: false });
       if (data.code) setDevCode(data.code);
       setStep('code');
       startCountdown();
@@ -96,7 +96,7 @@ export function ForgotPasswordForm() {
     if (countdown > 0) return;
     setLoading(true);
     try {
-      const data: any = await api('/auth/forgot-password', { body: { email } });
+      const data: any = await api('/auth/forgot-password', { body: { email }, auth: false });
       if (data.code) setDevCode(data.code);
       setCode(['', '', '', '', '', '']);
       startCountdown();
@@ -115,7 +115,7 @@ export function ForgotPasswordForm() {
     }
     setLoading(true);
     try {
-      await api('/auth/reset-password', { body: { email, code: fullCode, newPassword } });
+      await api('/auth/reset-password', { body: { email, code: fullCode, newPassword }, auth: false });
       setStep('success');
       toast.success('Password reset! Please sign in with your new password');
     } catch (err: any) { toast.error(err.message); }

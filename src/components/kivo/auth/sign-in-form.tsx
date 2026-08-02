@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { useAuthStore, triggerNotifications } from '@/stores/auth-store';
 import { useUIStore } from '@/stores/ui-store';
 import { auth } from '@/lib/firebase';
-import { api } from '@/lib/api';
+import { authFetch } from '@/lib/api';
 import { ArrowLeft, Loader2, FlaskConical } from 'lucide-react';
 import { toast } from 'sonner';
 import type { User } from '@/types';
@@ -42,7 +42,7 @@ function getFirebaseErrorMessage(err: any): string | null {
 
 export function SignInForm() {
   const setView = useUIStore((s) => s.setView);
-  const { setUser, setToken } = useAuthStore();
+  const { setUser, setIsDemo } = useAuthStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -52,16 +52,25 @@ export function SignInForm() {
     if (!email || !password) return;
     setLoading(true);
     try {
-      const credential = await signInWithEmailAndPassword(auth, email, password);
-      const firebaseUser = credential.user;
-      const idToken = await firebaseUser.getIdToken();
+      await signInWithEmailAndPassword(auth, email, password);
+      const firebaseUser = auth.currentUser;
+      if (!firebaseUser) throw new Error('Sign in failed');
 
       // Fetch the canonical KIVO user (DB record) so user.id matches the ids
-      // used by chat/friends APIs. Falls back to a Firebase-derived user if
-      // no DB record exists yet (e.g. account not created via Signup).
+      // used by chat/friends APIs. authFetch() attaches a fresh Firebase ID
+      // token automatically — no token is cached here. autoSignOut:false keeps
+      // a 401 from /auth/me from killing the fresh session, because a 401 here
+      // means "no DB record yet" (e.g. account not created via Signup), not an
+      // expired token. Falls back to a Firebase-derived user in that case.
       let userToStore: User;
       try {
-        userToStore = await api<User>('/auth/me', { token: idToken });
+        const res = await authFetch('/api/auth/me', {}, { autoSignOut: false });
+        const json = await res.json().catch(() => ({ success: false }));
+        if (res.ok && json.success) {
+          userToStore = json.data as User;
+        } else {
+          throw new Error('No profile');
+        }
       } catch {
         userToStore = {
           id: firebaseUser.uid,
@@ -84,7 +93,7 @@ export function SignInForm() {
       }
 
       setUser(userToStore);
-      setToken(idToken);
+      setIsDemo(false);
       if (!userToStore.emailVerified) {
         setView('verify-email');
         toast.info('Please verify your email to continue');
@@ -226,7 +235,7 @@ export function SignInForm() {
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
               });
-              setToken('demo-token-mock');
+              setIsDemo(true);
               setView('chat');
               toast.success('Welcome to KIVO Demo!');
             }}

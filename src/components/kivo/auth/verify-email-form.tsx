@@ -14,7 +14,7 @@ import { toast } from 'sonner';
 import Image from 'next/image';
 
 export function VerifyEmailForm() {
-  const { user, token, setUser } = useAuthStore();
+  const { user, setUser } = useAuthStore();
   const { setView } = useUIStore();
   const [code, setCode] = useState(['', '', '', '', '', '']);
   const [loading, setLoading] = useState(false);
@@ -40,7 +40,7 @@ export function VerifyEmailForm() {
     }
     if (!fbu.emailVerified) return false;
     try {
-      await api('/auth/verify-email', { token, body: {} });
+      await api('/auth/verify-email', { body: {} });
     } catch {
       // Best-effort sync — Firebase is the source of truth.
     }
@@ -64,25 +64,15 @@ export function VerifyEmailForm() {
   useEffect(() => {
     if (verified) return;
     pollingRef.current = setInterval(async () => {
-      if (!token) return;
+      if (!auth.currentUser) return;
       try {
         // Firebase sessions: detect verification via reload()
-        if (auth.currentUser) {
-          const ok = await verifyWithFirebase();
-          if (ok && pollingRef.current) clearInterval(pollingRef.current);
-          return;
-        }
-        // Legacy sessions: poll the DB-backed /auth/me
-        const me: any = await api('/auth/me', { token });
-        if (me.emailVerified) {
-          setVerified(true);
-          setUser(me);
-          if (pollingRef.current) clearInterval(pollingRef.current);
-        }
+        const ok = await verifyWithFirebase();
+        if (ok && pollingRef.current) clearInterval(pollingRef.current);
       } catch { /* ignore */ }
     }, 5000);
     return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
-  }, [token, verified, setUser, user]);
+  }, [verified, setUser, user]);
 
   // Countdown timer for resend
   useEffect(() => {
@@ -107,7 +97,7 @@ export function VerifyEmailForm() {
       // Legacy sessions: verify with the 6-digit code
       const fullCode = code.join('');
       if (fullCode.length !== 6) return;
-      await api('/auth/verify-email', { token, body: { code: fullCode } });
+      await api('/auth/verify-email', { body: { code: fullCode } });
       setVerified(true);
       if (user) setUser({ ...user, emailVerified: true });
       toast.success('Email verified successfully!');
@@ -119,24 +109,13 @@ export function VerifyEmailForm() {
   };
 
   const handleResend = async () => {
-    if (countdown > 0 || !token) return;
+    if (countdown > 0 || !auth.currentUser) return;
     setResendLoading(true);
     try {
       // Firebase sessions: resend the verification email
-      if (auth.currentUser) {
-        await sendEmailVerification(auth.currentUser);
-        setCountdown(60);
-        toast.success('Verification email sent! Check your inbox.');
-        return;
-      }
-      // Legacy sessions: request a new 6-digit code
-      const data: any = await api('/auth/send-verification', { token, body: {} });
-      if (data.code) setDevCode(data.code);
-      setCode(['', '', '', '', '', '']);
+      await sendEmailVerification(auth.currentUser);
       setCountdown(60);
-      toast.success(data.message || 'Verification code sent!');
-      // Focus first input
-      inputRefs.current[0]?.focus();
+      toast.success('Verification email sent! Check your inbox.');
     } catch (err: any) {
       toast.error(err.message);
     } finally {
@@ -175,7 +154,7 @@ export function VerifyEmailForm() {
           .finally(() => setLoading(false));
       } else {
         const fullCode = newCode.join('');
-        api('/auth/verify-email', { token, body: { code: fullCode } })
+        api('/auth/verify-email', { body: { code: fullCode } })
           .then(() => {
             setVerified(true);
             if (user) setUser({ ...user, emailVerified: true });
@@ -212,7 +191,7 @@ export function VerifyEmailForm() {
           })
           .finally(() => setLoading(false));
       } else {
-        api('/auth/verify-email', { token, body: { code: pasted } })
+        api('/auth/verify-email', { body: { code: pasted } })
           .then(() => {
             setVerified(true);
             if (user) setUser({ ...user, emailVerified: true });

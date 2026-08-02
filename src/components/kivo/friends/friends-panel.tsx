@@ -33,7 +33,7 @@ interface Props {
 }
 
 export function FriendsPanel({ onClose }: Props) {
-  const { user, token } = useAuthStore();
+  const { user, isDemo } = useAuthStore();
   const { friends, pendingRequests, sentRequests, searchResults, isSearching, blockedUsers, setPendingRequests, addFriend, removeFriend, addSentRequest, removeSentRequest, setSearchResults, setIsSearching, removeBlockedUser } = useFriendsStore();
   const { addConversation, setActiveConversationId } = useChatStore();
   const [search, setSearch] = useState('');
@@ -42,9 +42,10 @@ export function FriendsPanel({ onClose }: Props) {
 
   const searchUsers = async (q: string) => {
     if (q.length < 2) { setSearchResults([]); return; }
+    if (isDemo) { setSearchResults([]); return; }
     setIsSearching(true);
     try {
-      const results = await api<User[]>('/users/search?q=' + encodeURIComponent(q), { token });
+      const results = await api<User[]>('/users/search?q=' + encodeURIComponent(q));
       setSearchResults(results);
     } catch { /* ignore */ }
     setIsSearching(false);

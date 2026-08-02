@@ -153,8 +153,8 @@ function ensureNativeListeners() {
         const { useUIStore } = await import('@/stores/ui-store');
         const { useAuthStore } = await import('@/stores/auth-store');
 
-        const { user, token } = useAuthStore.getState();
-        if (user && token) {
+        const { user } = useAuthStore.getState();
+        if (user) {
           useChatStore.getState().setActiveConversationId(conversationId);
           useUIStore.getState().setView('chat');
         }
